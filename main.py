@@ -7,7 +7,6 @@ import hashlib
 import json
 import random
 import time
-import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,13 +18,16 @@ from astrbot.api.message_components import Image, Plain
 from astrbot.api.star import Context, Star, StarTools
 
 from .catalog import Catalog
-from .domain import change_state, parse_command, prepare_state
+from .domain import parse_command
 from .image_store import ImageStore
-from .qq_media import QQMediaStore
+from .qq_media import OFFICIAL_PLATFORMS, QQMediaStore, send_qq_markdown
 from .rendering import qq_markdown, unescape_markdown_text
-from .replies import ReplyMixin, escape_markdown_field
+from .replies import QuickActions, ReplyMixin, escape_markdown_field, quick_actions
+from .storage import WifeStore
+from .webui import Dashboard
 
 PLUGIN_NAME = "astrbot_plugin_mywife"
+HISTORY_PAGE_SIZE = 10
 
 
 def bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -45,7 +47,8 @@ class MyWifePlugin(ReplyMixin, Star):
         self.catalog = Catalog(self.data_dir, config)
         self.images = ImageStore(self.data_dir, config)
         self.qq_images = QQMediaStore(self.data_dir)
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self.store = WifeStore(self.data_dir / "records.sqlite3", self._legacy_records)
+        self._dashboard: Dashboard | None = None
         self._refresh_task: asyncio.Task | None = None
         self._last_manual_refresh = 0.0
         self._closing = False
@@ -59,17 +62,39 @@ class MyWifePlugin(ReplyMixin, Star):
             logger.warning("[我老婆] 时区无效，使用 Asia/Shanghai。")
 
     async def initialize(self) -> None:
+        await self.store.initialize()
+        if callable(getattr(self.context, "register_web_api", None)):
+            self._dashboard = Dashboard(self, PLUGIN_NAME)
+            self._dashboard.register()
         if self.config.get("auto_refresh_catalog", True):
             self._refresh_task = asyncio.create_task(self.catalog.refresh())
 
     async def terminate(self) -> None:
         self._closing = True
+        if self._dashboard is not None:
+            self._dashboard.close()
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
         if self._refresh_task:
             await asyncio.gather(self._refresh_task, return_exceptions=True)
         await self.qq_images.close()
         await self.images.close()
+
+    async def _legacy_records(self) -> dict[str, Any]:
+        # The public per-key KV API cannot enumerate players. Query only this
+        # plugin's legacy namespace through the same preferences service.
+        from astrbot.core import sp
+
+        rows = await sp.range_get_async("plugin", self.plugin_id)
+        return {
+            row.key: row.value["val"]
+            for row in rows
+            if isinstance(row.value, dict) and "val" in row.value
+        }
+
+    def _local_now(self) -> tuple[str, float]:
+        now = time.time()
+        return datetime.fromtimestamp(now, self.timezone).date().isoformat(), now
 
     @property
     def daily_limit(self) -> int:
@@ -84,8 +109,8 @@ class MyWifePlugin(ReplyMixin, Star):
         # QQ's adapter uses different pseudo self IDs for C2C/group/channel
         # messages. Its configured platform ID is the stable bot identity.
         self_id = "qq_official" if platform == "qq_official" else event.get_self_id()
-        scope = self.config.get("state_scope", "session")
-        if scope not in ("group", "user"):
+        scope = self._scope()
+        if scope == "session":
             # UMO follows AstrBot's actual session splitting. A shared group
             # UMO still needs the sender ID to keep each player's own state.
             parts = [
@@ -110,32 +135,43 @@ class MyWifePlugin(ReplyMixin, Star):
         digest = hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
         return f"user:{digest}"
 
+    def _scope(self) -> str:
+        scope = self.config.get("state_scope", "session")
+        return scope if scope in ("group", "user") else "session"
+
+    def _identity(self, event: AstrMessageEvent) -> dict[str, str]:
+        scope = self._scope()
+        if scope == "session":
+            session = str(event.unified_msg_origin)
+        elif scope == "group":
+            session = str(event.get_group_id() or "private")
+        else:
+            session = ""
+        return {
+            "platform": event.get_platform_name(),
+            "platform_id": event.get_platform_id(),
+            "scope": scope,
+            "session_id": session,
+            "user_id": event.get_sender_id(),
+            "display_name": event.get_sender_name() or "",
+        }
+
     def _scope_text(self) -> str:
         return {"group": "当前群聊或私聊", "user": "当前 Bot 的跨群共享范围"}.get(
-            self.config.get("state_scope", "session"), "当前会话"
+            self._scope(), "当前会话"
         )
 
     async def _reset_count_text(self, event: AstrMessageEvent) -> str:
         # All routing paths use this guard, including the no-prefix listener.
         if not event.is_admin():
             return "重置次数仅限 AstrBot 管理员使用。"
-        key = self._state_key(event)
-        async with self._user_lock(key):
-            now = time.time()
-            day = datetime.fromtimestamp(now, self.timezone).date().isoformat()
-            state = prepare_state(await self.get_kv_data(key, {}), day, now)
-            state["redraw_count"] = 0
-            await self.put_kv_data(key, state)
+        day, now = self._local_now()
+        state = await self.store.reset_count(
+            self._state_key(event), self._identity(event), day, now
+        )
         if state.get("marriage"):
             return f"已重置你在{self._scope_text()}的今日换老婆次数。当前婚姻仍有效，婚姻期间不能换老婆。"
         return f"已重置你在{self._scope_text()}的今日换老婆次数，今日可更换 {self.daily_limit} 次。当前角色和历史记录已保留。"
-
-    def _user_lock(self, key: str) -> asyncio.Lock:
-        lock = self._locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[key] = lock
-        return lock
 
     def _choose(self, previous: str | None) -> dict[str, Any] | None:
         candidates = [c for c in self.catalog.get_filtered() if c.id != previous]
@@ -146,20 +182,28 @@ class MyWifePlugin(ReplyMixin, Star):
         record["image_path"] = random.choice(character.image_paths)
         return record
 
-    async def _business(self, event: AstrMessageEvent, action: str) -> tuple[str, dict | None]:
-        key = self._state_key(event)
-        async with self._user_lock(key):
-            now = time.time()
-            day = datetime.fromtimestamp(now, self.timezone).date().isoformat()
-            state = prepare_state(await self.get_kv_data(key, {}), day, now)
-            scenario, character, values = change_state(
-                state, action, now, self.daily_limit, self.marriage_duration, self._choose
-            )
-            await self.put_kv_data(key, state)
+    async def _business(
+        self, event: AstrMessageEvent, action: str
+    ) -> tuple[str, dict[str, Any] | None, QuickActions]:
+        day, now = self._local_now()
+        limit = self.daily_limit
+        scenario, character, values = await self.store.change(
+            self._state_key(event),
+            self._identity(event),
+            day,
+            now,
+            action,
+            limit,
+            self.marriage_duration,
+            self._choose,
+        )
+        can_redraw = values.pop("can_redraw", None)
+        if can_redraw and character:
+            can_redraw = any(role.id != character.get("id") for role in self.catalog.get_filtered())
         text = await self._reply(
             event, scenario, event.get_sender_name() or "你", character, **values
         )
-        return text, character
+        return text, character, quick_actions(scenario, can_redraw=can_redraw)
 
     @staticmethod
     def _directed_to_other(event: AstrMessageEvent) -> bool:
@@ -169,7 +213,7 @@ class MyWifePlugin(ReplyMixin, Star):
             if comp.__class__.__name__ == "At" and str(getattr(comp, "qq", "")).lower() != "all"
         ]
         targets = {event.get_self_id()}
-        if event.get_platform_name() == "qq_official":
+        if event.get_platform_name() in OFFICIAL_PLATFORMS:
             # The official adapter represents its own C2C/channel mention with
             # this pseudo ID instead of the app ID.
             targets.add("qq_official")
@@ -184,7 +228,11 @@ class MyWifePlugin(ReplyMixin, Star):
         return event.chain_result(chain).use_markdown(markdown).use_t2i(False)
 
     async def _send(
-        self, event: AstrMessageEvent, text: str, character: dict | None = None
+        self,
+        event: AstrMessageEvent,
+        text: str,
+        character: dict | None = None,
+        actions: QuickActions = (),
     ) -> None:
         if self._closing:
             return
@@ -201,9 +249,8 @@ class MyWifePlugin(ReplyMixin, Star):
                     image = await self.images.get_image(path)
                 except Exception as exc:
                     logger.warning("[我老婆] 图片获取失败：%s", type(exc).__name__)
-        markdown = event.get_platform_name() == "qq_official" and bool(
-            self.config.get("qq_official_markdown", True)
-        )
+        markdown = self._markdown_enabled(event)
+        buttons = actions if markdown and self.config.get("qq_official_buttons", True) else ()
         if self._closing:
             return
         if markdown:
@@ -219,14 +266,25 @@ class MyWifePlugin(ReplyMixin, Star):
             if self._closing:
                 return
             if image is None or (image_url and size):
-                await event.send(
-                    self._result(event, qq_markdown(text, image_url, size), markdown=True)
-                )
-                return
-            # Keep text+picture together in normal rich media when the native
-            # Markdown image service is unavailable. Never embed a broken link.
-            logger.warning("[我老婆] QQ Markdown 图片上传暂不可用，使用普通图文。")
+                body = qq_markdown(text, image_url, size)
+                try:
+                    sent = await send_qq_markdown(event, body, buttons)
+                    if sent is None:
+                        # Older or custom adapters still get the SDK result.
+                        await event.send(self._result(event, body, markdown=True))
+                        return
+                    if sent:
+                        return
+                except Exception as exc:
+                    # QQ may already have accepted the message if the connection
+                    # closed before its response arrived. Avoid a duplicate post.
+                    logger.warning("[我老婆] QQ 消息送达状态未确认：%s", type(exc).__name__)
+                    return
+            else:
+                logger.warning("[我老婆] QQ Markdown 图片上传暂不可用，使用普通图文。")
             text = unescape_markdown_text(text)
+            if buttons:
+                text += "\n快捷指令：" + " · ".join(command for _, command in buttons)
         try:
             await event.send(self._result(event, text, image=image, markdown=False))
         except Exception as exc:
@@ -234,6 +292,11 @@ class MyWifePlugin(ReplyMixin, Star):
                 raise
             logger.warning("[我老婆] 图文发送失败，尝试发送文字：%s", type(exc).__name__)
             await event.send(self._result(event, text, markdown=False))
+
+    def _markdown_enabled(self, event: AstrMessageEvent) -> bool:
+        return event.get_platform_name() in OFFICIAL_PLATFORMS and bool(
+            self.config.get("qq_official_markdown", True)
+        )
 
     def _help(self) -> str:
         return (
@@ -246,7 +309,7 @@ class MyWifePlugin(ReplyMixin, Star):
             "jrlp 下载图库：刷新角色清单；图片在抽取时下载\n"
             "jrlp force-download：管理员强制刷新清单\n"
             "jrlp 图鉴 关键词：查找角色或作品；省略关键词查看统计\n"
-            "jrlp 历史：查看自己的最近 20 次抽取记录\n"
+            "jrlp 历史 [页码]：按页查看自己的抽取记录\n"
             "jrlp 重置次数 / 重置次数 / 重置换：管理员重置自己的今日更换次数\n"
             "jrlp help：查看帮助。支持 ~、.、/ 前缀。"
         )
@@ -279,27 +342,42 @@ class MyWifePlugin(ReplyMixin, Star):
         lines.extend(f"• {display(c.name)} — {display(c.source)}" for c in matches[:10])
         return "\n".join(lines)
 
-    async def _history_text(self, event: AstrMessageEvent) -> str:
-        key = self._state_key(event)
-        async with self._user_lock(key):
-            now = time.time()
-            day = datetime.fromtimestamp(now, self.timezone).date().isoformat()
-            state = prepare_state(await self.get_kv_data(key, {}), day, now)
-            await self.put_kv_data(key, state)
-        if not state["history"]:
-            return "还没有抽取记录，发送 jrlp 抽取今日老婆吧。"
-        lines = ["你的最近抽取记录："]
-        markdown = event.get_platform_name() == "qq_official" and self.config.get(
-            "qq_official_markdown", True
+    async def _history_reply(
+        self, event: AstrMessageEvent, argument: str = ""
+    ) -> tuple[str, QuickActions]:
+        if argument and (not argument.isascii() or not argument.isdecimal() or len(argument) > 7):
+            return "页码请用正整数，例如 jrlp 历史 2。", quick_actions("history")
+        page = int(argument or "1")
+        if not 1 <= page <= 1_000_000:
+            return "页码须在 1 到 1000000 之间。", quick_actions("history")
+        result = await self.store.history(
+            self._state_key(event),
+            action="draws",
+            limit=HISTORY_PAGE_SIZE,
+            offset=(page - 1) * HISTORY_PAGE_SIZE,
         )
-        display = escape_markdown_field if markdown else str
-        for item in reversed(state["history"]):
+        if not result["total"]:
+            return "还没有抽取记录，发送 jrlp 抽取今日老婆吧。", quick_actions("history")
+        pages = (result["total"] + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE
+        if not result["items"]:
+            return f"没有第 {page} 页记录。共 {pages} 页，发送 jrlp 历史 返回第一页。", (
+                ("第一页", "jrlp 历史"),
+            )
+        lines = [f"你的抽取记录 · 第 {page}/{pages} 页（共 {result['total']} 条）"]
+        display = escape_markdown_field if self._markdown_enabled(event) else str
+        for item in result["items"]:
             character = item["character"]
             action = "更换" if item.get("action") == "redraw" else "抽取"
             lines.append(
                 f"• {item.get('date', '')} {action}：{display(character.get('name', '未知角色'))} — {display(character.get('source', '出处未收录'))}"
             )
-        return "\n".join(lines)
+        actions = quick_actions("history")
+        if page > 1:
+            actions += (("上一页", f"jrlp 历史 {page - 1}"),)
+        if page < pages:
+            actions += (("下一页", f"jrlp 历史 {page + 1}"),)
+            lines.append(f"发送 jrlp 历史 {page + 1} 查看下一页。")
+        return "\n".join(lines), actions
 
     async def _download_text(self, event: AstrMessageEvent, force: bool) -> str:
         if force and not event.is_admin():
@@ -323,34 +401,32 @@ class MyWifePlugin(ReplyMixin, Star):
         action, argument = command
         try:
             character = None
+            actions = quick_actions(action)
             if action == "help":
                 text = self._help()
             elif action == "status":
                 text = self._status()
             elif action == "catalog":
-                markdown = event.get_platform_name() == "qq_official" and self.config.get(
-                    "qq_official_markdown", True
-                )
-                text = self._catalog_text(argument, markdown)
+                text = self._catalog_text(argument, self._markdown_enabled(event))
             elif action == "history":
-                text = await self._history_text(event)
+                text, actions = await self._history_reply(event, argument)
             elif action == "reset_count":
                 text = await self._reset_count_text(event)
             elif action in ("download", "force_download"):
                 text = await self._download_text(event, action == "force_download")
             else:
-                text, character = await self._business(event, action)
+                text, character, actions = await self._business(event, action)
         except Exception as exc:
             logger.error("[我老婆] 指令处理失败：%s", type(exc).__name__)
             await self._send(
                 event, "本次操作未能完成，请稍后重试；若持续出现，请联系管理员查看我老婆插件日志。"
             )
             return
-        await self._send(event, text, character)
+        await self._send(event, text, character, actions)
 
     @filter.command("jrlp", alias={"今日老婆"})
     async def jrlp(self, event: AstrMessageEvent) -> None:
-        """抽取今日老婆；支持状态、结婚、离婚、下载、图鉴、历史、帮助。"""
+        """抽取今日老婆；支持状态、结婚、离婚、下载、图鉴、历史分页、帮助。"""
         await self._dispatch(event)
 
     @filter.command("hlp", alias={"换老婆"})

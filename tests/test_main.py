@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import importlib.util
+import sqlite3
 import sys
 import tempfile
 import types
@@ -81,16 +81,10 @@ class Event:
 class Plugin(module.MyWifePlugin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.kv = {}
-        self.fail_save = False
+        self.legacy_kv = {}
 
-    async def get_kv_data(self, key, default):
-        return copy.deepcopy(self.kv.get(key, default))
-
-    async def put_kv_data(self, key, value):
-        if self.fail_save:
-            raise OSError("Simulated unavailable database")
-        self.kv[key] = copy.deepcopy(value)
+    async def _legacy_records(self):
+        return self.legacy_kv
 
 
 class MainTests(unittest.IsolatedAsyncioTestCase):
@@ -112,13 +106,14 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.on_message(event)
         self.assertEqual(len(event.sent), 1)
         self.assertTrue(event.stopped)
-        self.assertEqual(len(next(iter(self.plugin.kv.values()))["history"]), 1)
+        self.assertEqual((await self.plugin.store.history())["total"], 1)
 
     async def test_concurrent_draws_have_single_persistent_result(self):
         events = [Event() for _ in range(12)]
         await asyncio.gather(*(self.plugin._dispatch(event) for event in events))
-        state = next(iter(self.plugin.kv.values()))
-        self.assertEqual(len(state["history"]), 1)
+        day, now = self.plugin._local_now()
+        state = await self.plugin.store.get_player(self.plugin._state_key(events[0]), day, now)
+        self.assertEqual((await self.plugin.store.history())["total"], 1)
         self.assertEqual(state["redraw_count"], 0)
         self.assertTrue(
             all(state["wife"]["name"] in event.sent[0].chain[0].text for event in events)
@@ -153,9 +148,15 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_save_failure_does_not_send_a_success_or_commit_history(self):
         event = Event()
-        self.plugin.fail_save = True
-        await self.plugin._dispatch(event)
-        self.assertEqual(self.plugin.kv, {})
+        with patch.object(
+            self.plugin.store, "_insert_history", side_effect=sqlite3.OperationalError
+        ):
+            await self.plugin._dispatch(event)
+        self.assertEqual((await self.plugin.store.history())["total"], 0)
+        day, now = self.plugin._local_now()
+        self.assertIsNone(
+            await self.plugin.store.get_player(self.plugin._state_key(event), day, now)
+        )
         self.assertIn("未能完成", event.sent[0].chain[0].text)
 
     async def test_qq_user_scope_has_stable_identity_across_adapter_pseudo_self_ids(self):
@@ -228,6 +229,34 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin._send(event, "original result", {"image_path": "img1/A!B.jpg"})
         self.assertEqual(len(event.sent), 1)
         self.assertIn("original result", event.sent[0].chain[0].text)
+
+    async def test_official_markdown_rejection_falls_back_to_plain_picture_and_commands(self):
+        event = Event(platform="qq_official")
+        self.plugin.config["enable_images"] = True
+        self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
+        self.plugin.images.image_dimensions = AsyncMock(return_value=(8, 8))
+        self.plugin.qq_images.get_image_url = AsyncMock(return_value="qqbot-media://image/v1/image")
+        with patch.object(module, "send_qq_markdown", return_value=False) as send:
+            await self.plugin._send(
+                event, "Alice", {"image_path": "img1/A!B.jpg"}, (("历史", "jrlp 历史"),)
+            )
+        send.assert_awaited_once()
+        result = event.sent[0]
+        self.assertFalse(result.use_markdown_)
+        self.assertEqual(len(result.chain), 2)
+        self.assertIn("jrlp 历史", result.chain[0].text)
+
+    async def test_official_button_setting_and_exhausted_redraws(self):
+        event = Event(platform="qq_official")
+        self.plugin.config["daily_hlp_limit"] = 1
+        with patch.object(module, "send_qq_markdown", return_value=True) as send:
+            await self.plugin._dispatch(event)
+            self.assertIn(("换老婆", "hlp"), send.await_args.args[2])
+            await self.plugin._dispatch(Event("hlp", platform="qq_official"))
+            self.assertEqual([label for label, _ in send.await_args.args[2]], ["结婚", "历史"])
+            self.plugin.config["qq_official_buttons"] = False
+            await self.plugin._dispatch(Event("jrlp", platform="qq_official"))
+            self.assertEqual(send.await_args.args[2], ())
 
     async def test_force_refresh_requires_admin(self):
         self.plugin.catalog.refresh = AsyncMock()

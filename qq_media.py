@@ -1,4 +1,4 @@
-"""Upload cached pictures to QQ's own Markdown image service.
+"""QQ native Markdown messages, command buttons, and image uploads.
 
 The authenticated API session belongs to AstrBot; COS uploads use a separate
 session without its authorization headers. No application secrets are stored.
@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import tempfile
 import time
@@ -22,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import aiohttp
 from PIL import Image
@@ -193,9 +194,128 @@ def _save_cache(path: Path, entries: dict[str, dict[str, Any]]) -> None:
 class _MediaError(RuntimeError):
     def __init__(self, status: int = 0, code: int = 0) -> None:
         # Never put receipts, authorization headers or signed URLs in an error.
-        super().__init__(f"QQ media request status={status}, code={code}")
+        super().__init__(f"QQ request status={status}, code={code}")
         self.status = status
         self.code = code
+
+
+async def _request_json(api: Any, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Use the adapter's credentials and avoid implicit retries of a message POST."""
+    from botpy.http import Route
+
+    http = api._http
+    await http.check_session()
+    route = Route("POST", path, is_sandbox=bool(http.is_sandbox))
+    async with http._session.request(
+        route.method,
+        route.url,
+        headers=dict(http._headers),
+        timeout=aiohttp.ClientTimeout(total=20),
+        allow_redirects=False,
+        json=payload,
+    ) as response:
+        try:
+            document = await response.json(content_type=None)
+        except (ValueError, aiohttp.ContentTypeError):
+            raise _MediaError(response.status) from None
+        if not isinstance(document, dict):
+            raise _MediaError(response.status)
+        code = document.get("code", 0)
+        code = int(code) if str(code).isdigit() else 0
+        if not 200 <= response.status < 300 or code:
+            raise _MediaError(response.status, code)
+        return document
+
+
+def _message_target(event: Any) -> tuple[Any, str, dict[str, Any], str] | None:
+    try:
+        from botpy.message import C2CMessage, DirectMessage, GroupMessage, Message
+
+        if event.get_platform_name() not in OFFICIAL_PLATFORMS:
+            return None
+        api = event.bot.api
+        if not callable(getattr(api._http, "check_session", None)):
+            return None
+        source = event.message_obj.raw_message
+        match source:
+            case GroupMessage():
+                route, target = "/v2/groups/{}/messages", source.group_openid
+            case C2CMessage():
+                route, target = "/v2/users/{}/messages", source.author.user_openid
+            case DirectMessage():
+                route, target = "/dms/{}/messages", source.guild_id
+            case Message():
+                route, target = "/channels/{}/messages", source.channel_id
+            case _:
+                return None
+        # Only a real, passive reply can attach buttons. Platform IDs never
+        # become URL path separators, query parameters or fragments.
+        if not isinstance(target, str) or not target or not source.id:
+            return None
+        payload = {"msg_id": source.id}
+        if route.startswith("/v2/"):
+            payload.update(msg_type=2, msg_seq=random.randint(1, 10000))
+        return api, route.format(quote(target, safe="")), payload, str(event.get_sender_id() or "")
+    except (AttributeError, ImportError, TypeError):
+        return None
+
+
+def _keyboard(actions: tuple[tuple[str, str], ...], sender: str) -> dict[str, Any]:
+    buttons = [
+        {
+            "id": f"mywife-{index}",
+            "render_data": {"label": label, "visited_label": label, "style": int(index == 1)},
+            "action": {
+                "type": 2,
+                "permission": {"type": 0, "specify_user_ids": [sender]},
+                "data": command,
+                "enter": True,
+                "unsupport_tips": "请在当前聊天输入：" + command,
+            },
+        }
+        for index, (label, command) in enumerate(actions[:5], 1)
+    ]
+    return {"content": {"rows": [{"buttons": buttons}]}}
+
+
+async def send_qq_markdown(
+    event: Any, markdown: str, actions: tuple[tuple[str, str], ...] = ()
+) -> bool | None:
+    """Send through QQ: True if accepted, False if rejected, None if unavailable.
+
+    A rejected custom keyboard is retried as Markdown with typed commands.
+    Connection failures after submission are ambiguous and are not retried
+    here: a lost acknowledgment can still mean QQ displayed the message.
+    """
+    target = _message_target(event)
+    if target is None:
+        return None
+    api, route, payload, sender = target
+    payload["markdown"] = {"content": markdown}
+    if actions and sender:
+        payload["keyboard"] = _keyboard(actions, sender)
+    for attempt in range(2):
+        try:
+            await _request_json(api, route, payload)
+        except _MediaError as exc:
+            # A malformed success response or server/transport failure can
+            # have already delivered the post; do not send another one.
+            if not (400 <= exc.status < 500 or (200 <= exc.status < 300 and exc.code)):
+                raise
+            logger.warning("MyWife QQ Markdown rejected: status=%s code=%s", exc.status, exc.code)
+            if attempt or "keyboard" not in payload or exc.status in {401, 404, 429}:
+                return False
+            footer = "快捷指令：" + " · ".join(f"`{command}`" for _, command in actions[:5])
+            payload = {key: value for key, value in payload.items() if key != "keyboard"}
+            payload["markdown"] = {"content": f"{markdown.rstrip()}\n\n{footer}\n"}
+        except aiohttp.ClientConnectorError:
+            return False  # The connection was never established.
+        else:
+            # Match AstrBot's send bookkeeping without invoking its second
+            # platform send, which cannot carry QQ's type-2 command buttons.
+            event._has_send_oper = True
+            return True
+    return False
 
 
 class QQMediaStore:
@@ -290,31 +410,7 @@ class QQMediaStore:
             logger.warning("MyWife QQ media upload task failed")
 
     async def _qq_request(self, api: Any, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        # Use the authenticated AstrBot transport, avoiding botpy's implicit POST retries.
-        from botpy.http import Route
-
-        http = api._http
-        await http.check_session()
-        route = Route("POST", path, is_sandbox=bool(http.is_sandbox))
-        async with http._session.request(
-            route.method,
-            route.url,
-            headers=dict(http._headers),
-            timeout=aiohttp.ClientTimeout(total=20),
-            allow_redirects=False,
-            json=payload,
-        ) as response:
-            try:
-                document = await response.json(content_type=None)
-            except (ValueError, aiohttp.ContentTypeError):
-                raise _MediaError(response.status) from None
-            if not isinstance(document, dict):
-                raise _MediaError(response.status)
-            code = document.get("code", 0)
-            code = int(code) if str(code).isdigit() else 0
-            if not 200 <= response.status < 300 or code:
-                raise _MediaError(response.status, code)
-            return document
+        return await _request_json(api, path, payload)
 
     async def _get_cos_session(self) -> aiohttp.ClientSession:
         if self._cos_session is None or self._cos_session.closed:

@@ -70,7 +70,10 @@ def parse_command(text: str) -> tuple[str, str] | None:
     }
     if sub in aliases:
         return aliases[sub], ""
-    first = sub.split(maxsplit=1)[0]
+    parts = sub.split(maxsplit=1)
+    first = parts[0]
+    if first in ("历史", "history"):
+        return "history", parts[1] if len(parts) > 1 else ""
     if first in ("图鉴", "catalog"):
         original_sub = text[len(text) - len(sub) :]
         parts = original_sub.split(maxsplit=1)
@@ -100,13 +103,13 @@ def prepare_state(raw: Any, day: str, now: float) -> dict[str, Any]:
                 state["marriage"] = None
             else:
                 marriage.update(started_at=started, expires_at=expires, duration_days=duration)
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             state["marriage"] = None
     if state.get("date") != day:
         state.update(date=day, wife=None, redraw_count=0)
     try:
         state["redraw_count"] = max(0, int(state.get("redraw_count", 0)))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         state["redraw_count"] = 0
     state["history"] = (
         [

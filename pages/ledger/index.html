@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>我老婆 · 抽取账本</title>
+    <link rel="stylesheet" href="./style.css">
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <main>
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">我老婆 <span>•</span> 管理台</p>
+          <h1>抽取账本</h1>
+          <p class="intro">查看玩家抽到的角色、当前婚姻和历史流水。</p>
+        </div>
+        <div class="masthead-actions">
+          <span id="today" class="stamp" aria-label="插件日期">—</span>
+          <button type="button" class="secondary" id="refresh">刷新数据</button>
+        </div>
+      </header>
+
+      <dl class="summary" aria-label="运行概览">
+        <div><dt>今日抽取</dt><dd id="stat-today-draws">—</dd></div>
+        <div><dt>有效婚姻</dt><dd id="stat-marriages">—</dd></div>
+        <div><dt>累计抽取</dt><dd id="stat-draws">—</dd></div>
+        <div><dt>玩家记录</dt><dd id="stat-players">—</dd></div>
+      </dl>
+
+      <section class="panel" aria-label="数据管理">
+        <div class="panel-heading">
+          <nav aria-label="账本视图">
+            <button type="button" class="tab" id="history-tab" aria-pressed="true">抽取与关系流水</button>
+            <button type="button" class="tab" id="players-tab" aria-pressed="false">玩家与婚姻</button>
+          </nav>
+          <span class="panel-note" id="limit"></span>
+        </div>
+
+        <form id="filters" class="filters">
+          <label class="query">搜索
+            <input type="search" name="q" id="query" maxlength="100" placeholder="玩家、角色或出处">
+          </label>
+          <label id="action-filter">流水类型
+            <select name="action" id="action">
+              <option value="">全部类型</option>
+              <option value="draws">抽取和更换</option>
+              <option value="draw">首次抽取</option>
+              <option value="redraw">更换角色</option>
+              <option value="marry">结婚</option>
+              <option value="divorce">离婚</option>
+            </select>
+          </label>
+          <button type="submit" class="primary">查询</button>
+          <button type="button" class="secondary" id="clear-filters">清除筛选</button>
+        </form>
+        <div id="focused-player" class="focused-player" hidden></div>
+        <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+
+        <div class="table-scroll" id="records" aria-busy="true">
+          <table>
+            <caption class="sr-only" id="record-caption">抽取与关系流水</caption>
+            <thead id="record-head"></thead>
+            <tbody id="record-body"></tbody>
+          </table>
+          <p id="empty" class="empty">正在连接 AstrBot 管理面板…</p>
+        </div>
+        <footer class="pager">
+          <span id="page-label" aria-live="polite">—</span>
+          <div>
+            <button type="button" class="secondary" id="previous" disabled>上一页</button>
+            <button type="button" class="secondary" id="next" disabled>下一页</button>
+          </div>
+        </footer>
+      </section>
+
+      <p class="footnote">从旧版迁移的记录可能没有玩家身份或具体时间。仅 AstrBot 管理面板授权用户可查看此页。</p>
+    </main>
+
+    <dialog id="reset-dialog" aria-labelledby="reset-title">
+      <form method="dialog">
+        <h2 id="reset-title">重置今日更换次数</h2>
+        <p id="reset-details"></p>
+        <p>此操作会保留当前角色、婚姻和历史流水。</p>
+        <div class="dialog-buttons">
+          <button value="cancel" class="secondary" autofocus>取消</button>
+          <button value="reset" class="primary">确认重置</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
