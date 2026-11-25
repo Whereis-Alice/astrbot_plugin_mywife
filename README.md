@@ -47,7 +47,7 @@ LLM 模式不会在模型回复后拼接一段固定的角色介绍。模型请�
 
 ## 指令
 
-原有指令保持不变，另增加图鉴搜索和历史查看。
+原有指令保持不变，另增加图鉴搜索、历史查看和管理员重置次数。
 
 | 发送内容 | 功能 |
 |---|---|
@@ -60,7 +60,8 @@ LLM 模式不会在模型回复后拼接一段固定的角色介绍。模型请�
 | `jrlp force-download` / `jrlp 强制下载` | 管理员强制刷新角色清单 |
 | `jrlp help` / `jrlp 帮助` / `jrlp帮助` | 查看使用帮助 |
 | `jrlp 图鉴 关键词` / `jrlp catalog 关键词` | 按角色或作品搜索，最多显示前 10 条 |
-| `jrlp 历史` / `jrlp history` | 查看自己的最近 20 次抽取、更换记录 |
+| `jrlp 历史` / `jrlp history` | 查看自己在当前隔离范围内的最近 20 次抽取、更换记录 |
+| `jrlp 重置次数` / `重置次数` / `重置换` / `jrlp reset` | AstrBot 管理员重置自己在当前范围的今日换老婆次数 |
 
 支持 `~jrlp`、`.jrlp`、`/jrlp`、`~hlp` 等形式，也支持「和今日老婆结婚」「与今日老婆离婚」等原有中文快捷指令。群聊中能否直接发送无前缀指令，仍取决于平台是否将消息交给 AstrBot；QQ 官方 Bot 请按平台要求 @机器人或使用已配置的命令入口。
 
@@ -71,15 +72,25 @@ LLM 模式不会在模型回复后拼接一段固定的角色介绍。模型请�
 - 每天按配置时区的零点重置当前抽取和更换次数。默认跟随 AstrBot 全局时区，无效时回退到 `Asia/Shanghai`。
 - 已婚状态跨天保留，婚姻按连续 24 小时计算。婚姻期间不能换老婆；到期自动解除。
 - 修改婚期只影响之后新建立的婚姻。离婚后保留当前角色，可继续查看或在剩余次数内更换。
-- 默认每个群独立保存用户状态。选择 `state_scope=user` 后，同一平台、同一 Bot 下可跨群共享；切换范围会使用另一组状态，不会自动迁移。
+- 新安装默认使用 `state_scope=session`，按 AstrBot 会话标识和用户隔离：同一用户在不同会话的当前角色、更换次数、婚姻和最近历史各自独立。即使 AstrBot 关闭了“群内唯一会话”，同群不同用户仍各有自己的记录。
+- 可选择 `group`，让同一用户在同群共用记录；或选择 `user`，在同一平台、同一 Bot 下跨群共享。不同 Bot 始终隔离。升级保留已有的 `group/user` 配置与记录；需要会话隔离时在面板选择 `session`。切换范围或更改 AstrBot 会话划分会使用另一组记录，不会复制、删除旧记录。
+- 会话隔离采用 AstrBot 的会话来源标识，不随 LLM 的 `/new` 或切换人设额外重置。WebChat 的不同聊天本身拥有不同会话标识。
 
 ## QQ 官方 Bot：同一条 Markdown 图文
 
 启用 `qq_official_markdown` 后，角色文字与图片嵌入同一条原生 Markdown 消息，图片按比例显示。需要 Bot 具备原生 Markdown 发送权限；没有权限时请关闭该设置，使用普通图文。
 
-图片来自所选 monbed 镜像，QQ 也需要能访问该图片地址。`image_source` 可选择 `github`、`jsdelivr` 或 `jsdmirror`。本地缓存用于验证图片和普通图文发送；Markdown 内嵌图片使用对应的公网图片 URL。如果图片来源连接不佳，可以切换镜像。
+Bot 从所选 monbed 来源下载、验证原图，再使用当前 QQ 官方平台身份上传到 QQ 的图片存储。同一条 Markdown 消息内嵌入 QQ 专用图片引用，QQ 客户端无需直接访问 GitHub 或第三方镜像；不需要另外配置图床或 COS 密钥。上传结果按 Bot 和图片内容缓存，避免重复上传。
+
+`image_source` 可选择 `github`、`jsdelivr` 或 `jsdmirror`，只影响 Bot 下载原图。如果 QQ 的 Markdown 图片上传服务暂不可用，会降级为同一条普通图文消息；原图无法获取时才只回复文字。v1.0.0 的公网外链方式可能在 QQ 客户端显示破图，请更新至 v1.1.0。
 
 QQ 用户和群的 OpenID 按字符串处理，支持群聊、频道和私聊，不依赖 OneBot 的群成员接口。
+
+## 管理员重置次数
+
+发送 `jrlp 重置次数`、`重置次数`、`重置换` 或 `jrlp reset`，仅将自己的今日更换计数归零。当前角色、图片、婚姻和抽取历史保留；已婚时仍不能更换。命令只作用于当前 `state_scope` 对应的记录，不会批量重置全群，也不支持 @其他用户。普通用户会收到权限提示。
+
+这里的管理员指 **AstrBot 管理员**，不是 QQ 群管理员；请在 AstrBot 的管理员设置中添加相应用户。
 
 ## 配置项
 
@@ -93,14 +104,14 @@ QQ 用户和群的 OpenID 按字符串处理，支持群聊、频道和私聊，
 | `template_draw` | 上述默认模板 | 自定义首次抽取文案 |
 | `qq_official_markdown` | `true` | 官 Bot 使用单条 Markdown 图文 |
 | `enable_images` | `true` | 关闭后只回复文字 |
-| `image_source` | `github` | monbed 图片来源，可选 `jsdelivr` / `jsdmirror` |
+| `image_source` | `github` | Bot 下载 monbed 原图的来源，可选 `jsdelivr` / `jsdmirror` |
 | `auto_refresh_catalog` | `true` | 启动时在后台检查角色清单 |
 | `refresh_interval_hours` | `24` | 已有清单缓存未到此间隔时，启动检查会跳过 |
 | `source_filters` | `[]` | 允许抽取的准确作品／分类标签；留空使用整个库 |
 | `exclude_characters` | `[]` | 排除姓名，或指定「出处!姓名」 |
 | `daily_hlp_limit` | `5` | 每天可更换次数；首次抽取不计入 |
 | `marriage_duration` | `7` | 新建立婚姻的维持天数 |
-| `state_scope` | `group` | `group` 分群保存；`user` 在同一 Bot 下跨群共享 |
+| `state_scope` | `session` | `session` 按会话和用户隔离；`group` 同群同用户共用；`user` 在同一 Bot 下跨群共享 |
 | `timezone` | 留空 | 跟随 AstrBot 全局时区，或显式填写 IANA 时区 |
 | `genie_tts_enabled` | `false` | 可选 GENIE 语音联动；仅 LLM 模式启用 |
 
@@ -124,6 +135,6 @@ data/plugin_data/astrbot_plugin_mywife/
 
 插件代码采用 [MIT License](LICENSE)。monbed 清单保留其[原版权文本](data/LICENSE.monbed-wife)和[来源说明](data/NOTICE.md)。图片作品的版权归相应权利人；图库没有逐张作者、授权或内容分级字段，公开使用可通过作品筛选和角色排除整理适合自己机器人的角色池。
 
-开发验证：安装 `requirements.txt`、AstrBot 4.29.4、`pytest` 与 `ruff`，运行 `python -m pytest` 和 `ruff check .`。测试包含实际 SDK 消息类、双模式、并发状态、婚姻边界、图库缓存和单条 QQ Markdown payload。
+开发验证：安装 `requirements.txt`、AstrBot 4.29.4、`pytest` 与 `ruff`，运行 `python -m pytest` 和 `ruff check .`。测试包含实际 SDK 消息类、双模式、并发状态、会话隔离、重置权限、婚姻边界、图库缓存、QQ 官方图片上传与单条图文。
 
 遇到问题请在本仓库提交 [Issue](https://github.com/Whereis-Alice/astrbot_plugin_mywife/issues)，说明 AstrBot 版本、平台、回复模式、触发指令和错误现象；请勿公开 API Key 或 Bot 凭据。

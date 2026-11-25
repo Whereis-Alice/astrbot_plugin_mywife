@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import re
+
+
+def unescape_markdown_text(text: str) -> str:
+    """Keep literal nickname/source punctuation when falling back to plain text."""
+    return re.sub(r"\\([\\`*_{}\[\]()<>#+.!|~-])", r"\1", text)
+
 
 def qq_markdown(
     text: str, image_url: str | None = None, size: tuple[int, int] | None = None

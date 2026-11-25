@@ -21,7 +21,8 @@ from astrbot.api.star import Context, Star, StarTools
 from .catalog import Catalog
 from .domain import change_state, parse_command, prepare_state
 from .image_store import ImageStore
-from .rendering import qq_markdown
+from .qq_media import QQMediaStore
+from .rendering import qq_markdown, unescape_markdown_text
 from .replies import ReplyMixin, escape_markdown_field
 
 PLUGIN_NAME = "astrbot_plugin_mywife"
@@ -43,6 +44,7 @@ class MyWifePlugin(ReplyMixin, Star):
         self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME))
         self.catalog = Catalog(self.data_dir, config)
         self.images = ImageStore(self.data_dir, config)
+        self.qq_images = QQMediaStore(self.data_dir)
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
         self._refresh_task: asyncio.Task | None = None
         self._last_manual_refresh = 0.0
@@ -66,6 +68,7 @@ class MyWifePlugin(ReplyMixin, Star):
             self._refresh_task.cancel()
         if self._refresh_task:
             await asyncio.gather(self._refresh_task, return_exceptions=True)
+        await self.qq_images.close()
         await self.images.close()
 
     @property
@@ -77,13 +80,26 @@ class MyWifePlugin(ReplyMixin, Star):
         return bounded_int(self.config.get("marriage_duration", 7), 7, 1, 3650)
 
     def _state_key(self, event: AstrMessageEvent) -> str:
-        group = str(event.get_group_id() or "private")
-        if self.config.get("state_scope", "group") == "user":
-            group = "all_groups"
         platform = event.get_platform_name()
         # QQ's adapter uses different pseudo self IDs for C2C/group/channel
         # messages. Its configured platform ID is the stable bot identity.
         self_id = "qq_official" if platform == "qq_official" else event.get_self_id()
+        scope = self.config.get("state_scope", "session")
+        if scope not in ("group", "user"):
+            # UMO follows AstrBot's actual session splitting. A shared group
+            # UMO still needs the sender ID to keep each player's own state.
+            parts = [
+                platform,
+                event.get_platform_id(),
+                self_id,
+                "session",
+                str(event.unified_msg_origin),
+                event.get_sender_id(),
+            ]
+            digest = hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
+            return f"user:session:{digest}"
+        # Keep v1.0.0 keys exactly compatible for existing configurations.
+        group = str(event.get_group_id() or "private") if scope == "group" else "all_groups"
         parts = [
             platform,
             event.get_platform_id(),
@@ -93,6 +109,26 @@ class MyWifePlugin(ReplyMixin, Star):
         ]
         digest = hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
         return f"user:{digest}"
+
+    def _scope_text(self) -> str:
+        return {"group": "当前群聊或私聊", "user": "当前 Bot 的跨群共享范围"}.get(
+            self.config.get("state_scope", "session"), "当前会话"
+        )
+
+    async def _reset_count_text(self, event: AstrMessageEvent) -> str:
+        # All routing paths use this guard, including the no-prefix listener.
+        if not event.is_admin():
+            return "重置次数仅限 AstrBot 管理员使用。"
+        key = self._state_key(event)
+        async with self._user_lock(key):
+            now = time.time()
+            day = datetime.fromtimestamp(now, self.timezone).date().isoformat()
+            state = prepare_state(await self.get_kv_data(key, {}), day, now)
+            state["redraw_count"] = 0
+            await self.put_kv_data(key, state)
+        if state.get("marriage"):
+            return f"已重置你在{self._scope_text()}的今日换老婆次数。当前婚姻仍有效，婚姻期间不能换老婆。"
+        return f"已重置你在{self._scope_text()}的今日换老婆次数，今日可更换 {self.daily_limit} 次。当前角色和历史记录已保留。"
 
     def _user_lock(self, key: str) -> asyncio.Lock:
         lock = self._locks.get(key)
@@ -168,25 +204,36 @@ class MyWifePlugin(ReplyMixin, Star):
         markdown = event.get_platform_name() == "qq_official" and bool(
             self.config.get("qq_official_markdown", True)
         )
+        if self._closing:
+            return
         if markdown:
-            # An Image component changes QQ's msg_type. Embed its public URL in
-            # native Markdown instead, keeping text and image in one message.
+            # QQ clients can reject external GitHub/CDN pictures even when
+            # the bot downloaded them successfully. Use QQ-owned media instead.
             image_url, size = None, None
             if image and path:
                 try:
-                    image_url = self.images.public_url(path)
+                    image_url = await self.qq_images.get_image_url(event, image)
                     size = await self.images.image_dimensions(image)
-                except (OSError, ValueError):
-                    logger.warning("[我老婆] 图片尺寸读取失败，继续发送文字。")
-            await event.send(self._result(event, qq_markdown(text, image_url, size), markdown=True))
-        else:
-            try:
-                await event.send(self._result(event, text, image=image, markdown=markdown))
-            except Exception as exc:
-                if not image:
-                    raise
-                logger.warning("[我老婆] 图文发送失败，尝试发送文字：%s", type(exc).__name__)
-                await event.send(self._result(event, text, markdown=markdown))
+                except Exception as exc:
+                    logger.warning("[我老婆] QQ 图片处理失败：%s", type(exc).__name__)
+            if self._closing:
+                return
+            if image is None or (image_url and size):
+                await event.send(
+                    self._result(event, qq_markdown(text, image_url, size), markdown=True)
+                )
+                return
+            # Keep text+picture together in normal rich media when the native
+            # Markdown image service is unavailable. Never embed a broken link.
+            logger.warning("[我老婆] QQ Markdown 图片上传暂不可用，使用普通图文。")
+            text = unescape_markdown_text(text)
+        try:
+            await event.send(self._result(event, text, image=image, markdown=False))
+        except Exception as exc:
+            if not image:
+                raise
+            logger.warning("[我老婆] 图文发送失败，尝试发送文字：%s", type(exc).__name__)
+            await event.send(self._result(event, text, markdown=False))
 
     def _help(self) -> str:
         return (
@@ -200,6 +247,7 @@ class MyWifePlugin(ReplyMixin, Star):
             "jrlp force-download：管理员强制刷新清单\n"
             "jrlp 图鉴 关键词：查找角色或作品；省略关键词查看统计\n"
             "jrlp 历史：查看自己的最近 20 次抽取记录\n"
+            "jrlp 重置次数 / 重置次数 / 重置换：管理员重置自己的今日更换次数\n"
             "jrlp help：查看帮助。支持 ~、.、/ 前缀。"
         )
 
@@ -208,6 +256,7 @@ class MyWifePlugin(ReplyMixin, Star):
         return (
             "我老婆 · 状态\n"
             f"回复模式：{mode}\n"
+            f"记录范围：{self._scope_text()}\n"
             f"角色库：monbed/wife，共 {len(self.catalog.characters)} 条角色记录、{self.catalog.image_count} 张图片\n"
             f"当前可抽：{len(self.catalog.get_filtered())} 条角色记录\n"
             f"每日换老婆上限：{self.daily_limit} 次（首次抽取不计入）\n"
@@ -285,6 +334,8 @@ class MyWifePlugin(ReplyMixin, Star):
                 text = self._catalog_text(argument, markdown)
             elif action == "history":
                 text = await self._history_text(event)
+            elif action == "reset_count":
+                text = await self._reset_count_text(event)
             elif action in ("download", "force_download"):
                 text = await self._download_text(event, action == "force_download")
             else:
@@ -305,6 +356,11 @@ class MyWifePlugin(ReplyMixin, Star):
     @filter.command("hlp", alias={"换老婆"})
     async def hlp(self, event: AstrMessageEvent) -> None:
         """更换今日老婆，首次抽取不计入每日更换次数。"""
+        await self._dispatch(event)
+
+    @filter.command("重置次数", alias={"重置换"})
+    async def reset_count(self, event: AstrMessageEvent) -> None:
+        """AstrBot 管理员重置自己的当前范围今日换老婆次数。"""
         await self._dispatch(event)
 
     @filter.event_message_type(filter.EventMessageType.ALL)

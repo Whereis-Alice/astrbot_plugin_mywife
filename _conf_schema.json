@@ -41,7 +41,7 @@
     "hint": "按需下载并缓存。关闭后只发文字；图片暂不可用时也可正常回复。"
   },
   "image_source": {
-    "description": "图片下载与 Markdown 图片来源",
+    "description": "图片下载来源",
     "type": "string",
     "default": "github",
     "options": [
@@ -49,7 +49,7 @@
       "jsdelivr",
       "jsdmirror"
     ],
-    "hint": "只能使用 monbed/wife。GitHub 连接不佳可尝试其他镜像；QQ Markdown 图片还需要 QQ 客户端能访问所选来源。"
+    "hint": "Bot 从 monbed/wife 下载原图；GitHub 连接不佳可尝试镜像。QQ Markdown 图片会先上传到 QQ 官方存储。"
   },
   "auto_refresh_catalog": {
     "description": "启动时检查在线角色清单",
@@ -88,14 +88,15 @@
     "hint": "按连续 24 小时计算；修改配置只影响之后新建立的婚姻。"
   },
   "state_scope": {
-    "description": "用户状态范围",
+    "description": "抽取记录隔离范围",
     "type": "string",
-    "default": "group",
+    "default": "session",
     "options": [
+      "session",
       "group",
       "user"
     ],
-    "hint": "group：同一用户在不同群独立；user：同一平台、同一 Bot 下跨群共享。两种设置均隔离不同 Bot 和平台；切换不会迁移已有状态。"
+    "hint": "session：按 AstrBot 会话和用户独立保存角色、次数、婚姻及历史；group：同群同用户共用；user：同一 Bot 下跨群共享。旧 group/user 数据继续保留，切换范围不会迁移或删除。"
   },
   "genie_tts_enabled": {
     "description": "GENIE 语音联动（可选）",

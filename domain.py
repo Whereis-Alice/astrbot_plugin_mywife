@@ -22,6 +22,8 @@ def parse_command(text: str) -> tuple[str, str] | None:
         "与今日老婆离婚": "divorce",
         "下载图库": "download",
         "强制下载图库": "force_download",
+        "重置次数": "reset_count",
+        "重置换": "reset_count",
     }
     if lower in standalone:
         return standalone[lower], ""
@@ -34,7 +36,7 @@ def parse_command(text: str) -> tuple[str, str] | None:
         remainder
         and not remainder[0].isspace()
         and not remainder.startswith(
-            ("状态", "帮助", "结婚", "离婚", "下载", "强制下载", "图鉴", "历史")
+            ("状态", "帮助", "结婚", "离婚", "下载", "强制下载", "图鉴", "历史", "重置")
         )
     ):
         return None
@@ -61,6 +63,10 @@ def parse_command(text: str) -> tuple[str, str] | None:
         "强制下载图库": "force_download",
         "history": "history",
         "历史": "history",
+        "重置次数": "reset_count",
+        "重置换": "reset_count",
+        "reset": "reset_count",
+        "reset-count": "reset_count",
     }
     if sub in aliases:
         return aliases[sub], ""

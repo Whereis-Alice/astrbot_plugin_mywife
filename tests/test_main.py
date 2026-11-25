@@ -174,8 +174,8 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.config["enable_images"] = True
         self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
         self.plugin.images.image_dimensions = AsyncMock(return_value=(1000, 2000))
-        self.plugin.images.public_url = lambda path: (
-            "https://raw.githubusercontent.com/monbed/wife/main/img1/A%21B.jpg"
+        self.plugin.qq_images.get_image_url = AsyncMock(
+            return_value="qqbot-media://image/v1/mywife-native-image"
         )
         await self.plugin._send(event, "Alice 的角色", {"image_path": "img1/A!B.jpg"})
         self.assertEqual(len(event.sent), 1)
@@ -185,6 +185,32 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(result.chain[0], Plain)
         self.assertIn("![角色图片 #480px #960px]", result.chain[0].text)
         self.assertIn("Alice 的角色", result.chain[0].text)
+        self.assertIn("qqbot-media://image/v1/", result.chain[0].text)
+        self.assertNotIn("raw.githubusercontent.com", result.chain[0].text)
+
+    async def test_failed_native_upload_falls_back_to_one_normal_text_image_chain(self):
+        event = Event(platform="qq_official")
+        self.plugin.config["enable_images"] = True
+        self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
+        self.plugin.images.image_dimensions = AsyncMock(return_value=(8, 8))
+        self.plugin.qq_images.get_image_url = AsyncMock(return_value=None)
+        await self.plugin._send(event, "角色结果", {"image_path": "img1/A!B.jpg"})
+        self.assertEqual(len(event.sent), 1)
+        self.assertFalse(event.sent[0].use_markdown_)
+        self.assertIsInstance(event.sent[0].chain[0], Plain)
+        self.assertIsInstance(event.sent[0].chain[1], Image)
+        self.assertNotIn("http", event.sent[0].chain[0].text)
+
+    async def test_native_failure_does_not_show_markdown_escape_slashes(self):
+        event = Event(platform="qq_official")
+        self.plugin.config["enable_images"] = True
+        self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
+        self.plugin.images.image_dimensions = AsyncMock(return_value=(8, 8))
+        self.plugin.qq_images.get_image_url = AsyncMock(return_value=None)
+        await self.plugin._send(
+            event, r"Alice\_Isla\[星\]，老婆是角色\*甲", {"image_path": "img1/A!B.jpg"}
+        )
+        self.assertEqual(event.sent[0].chain[0].text, "Alice_Isla[星]，老婆是角色*甲")
 
     async def test_normal_platform_keeps_one_text_and_image_chain(self):
         event = Event()
