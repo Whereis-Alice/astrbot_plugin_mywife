@@ -1,2 +1,129 @@
-# astrbot_plugin_mywife
-我老婆：monbed/wife 角色库，LLM 或固定模板、角色出处、QQ 官方 Bot 单条 Markdown 图文，支持今日老婆、换老婆、结婚与离婚。
+# 我老婆
+
+为 AstrBot 添加「今日老婆」玩法：每天抽取一位角色，查看时会告诉你姓名和出处；还可以换老婆、结婚和离婚。
+
+角色库只使用 [monbed/wife](https://github.com/monbed/wife)，覆盖动漫、Galgame、手游和其他游戏角色，以及部分虚拟主播。回复可选择 **LLM 模式**或**固定模板模式**。QQ 官方 Bot 支持文字和图片在同一条 Markdown 消息中显示。
+
+## 安装与开始使用
+
+需要 **AstrBot 4.29.4 或更新的 4.x 版本**，运行环境为 Python 3.12 或更高版本。
+
+1. 在 AstrBot 管理面板打开「插件」，选择通过仓库地址安装。
+2. 填入 `https://github.com/Whereis-Alice/astrbot_plugin_mywife`，安装后启用「我老婆」。
+3. 在插件配置中选择回复模式。想直接使用固定文案，选择 `template`；想让机器人用当前人设说话，选择 `llm`，并确保 AstrBot 已配置聊天模型。
+4. 发送 `jrlp` 或 `今日老婆`。
+
+安装包内置角色清单，启用后即可抽取。**不需要先下载整个图库。** 每次只下载抽中角色的图片，之后优先使用本地缓存。首次使用图片需要联网；在线清单更新失败时会继续使用已有清单，图片无法获取时保留文字回复。
+
+## 两种回复模式：二选一
+
+| 模式 | 抽取、换老婆、结婚、离婚等业务文案 | 是否调用聊天模型 |
+|---|---|---|
+| `llm`：LLM 模式（默认） | 由当前模型结合当前会话人设生成，输入包含实际抽中角色的姓名和出处 | 是 |
+| `template`：固定模板 | 使用内置文案，可自定义首次抽取模板 | 否 |
+
+固定模板的默认效果：
+
+> 爱丽丝和艾拉的SuperStar，你今天的老婆是来自《赛马娘》的小栗帽，请好好珍惜哦~
+
+LLM 模式不会在模型回复后拼接一段固定的角色介绍。模型请求失败、超时、返回空内容，或回复遗漏角色姓名／出处时，会改用对应的固定模板；抽中角色和次数不会因此改变。帮助、状态、图库刷新、图鉴和历史等工具信息采用固定说明，两种模式共用。
+
+### 自定义固定模板
+
+在配置项 `template_draw` 中填写：
+
+```text
+{player}，你今天的老婆是{source_phrase}{wife_name}，请好好珍惜哦~
+```
+
+| 占位符 | 含义 |
+|---|---|
+| `{player}` | 发送者昵称；无法获取时使用「你」 |
+| `{wife_name}` | 角色姓名 |
+| `{source}` | 作品或分类的原始标签 |
+| `{source_phrase}` | 自动生成的出处短语，推荐使用 |
+
+`source_phrase` 对作品生成「来自《赛马娘》的」，对 Vtuber 等分类生成「「Vtuber」分类中的」。这样不会把分类误写成作品名称。不要在占位符里添加属性访问或格式转换；模板无效时自动使用默认文案。QQ 官方 Bot 的模板可写 Markdown，昵称、姓名和出处会作为普通文字插入。
+
+## 指令
+
+原有指令保持不变，另增加图鉴搜索和历史查看。
+
+| 发送内容 | 功能 |
+|---|---|
+| `jrlp` / `今日老婆` | 抽取今日老婆；当天再次查看保持角色和图片不变 |
+| `hlp` / `换老婆` | 更换今日老婆；默认每天可换 5 次 |
+| `结婚` / `jrlp 结婚` / `jrlp marry` | 与当前老婆结婚，默认维持 7 天 |
+| `离婚` / `jrlp 离婚` / `jrlp divorce` | 解除婚姻，保留当前角色 |
+| `jrlp status` / `jrlp 状态` / `jrlp状态` | 查看回复模式、图库和玩法规则 |
+| `jrlp download` / `jrlp 下载图库` / `下载图库` | 刷新在线角色清单；图片继续在抽取时下载 |
+| `jrlp force-download` / `jrlp 强制下载` | 管理员强制刷新角色清单 |
+| `jrlp help` / `jrlp 帮助` / `jrlp帮助` | 查看使用帮助 |
+| `jrlp 图鉴 关键词` / `jrlp catalog 关键词` | 按角色或作品搜索，最多显示前 10 条 |
+| `jrlp 历史` / `jrlp history` | 查看自己的最近 20 次抽取、更换记录 |
+
+支持 `~jrlp`、`.jrlp`、`/jrlp`、`~hlp` 等形式，也支持「和今日老婆结婚」「与今日老婆离婚」等原有中文快捷指令。群聊中能否直接发送无前缀指令，仍取决于平台是否将消息交给 AstrBot；QQ 官方 Bot 请按平台要求 @机器人或使用已配置的命令入口。
+
+## 玩法规则
+
+- 每天第一次抽取不占「换老婆」次数。默认可另外更换 5 次，设为 0 可禁止更换。
+- 同一角色的多张图片只占一个抽取名额。更换时会排除当前角色；筛选后只剩当前角色时，不更换也不扣次数。
+- 每天按配置时区的零点重置当前抽取和更换次数。默认跟随 AstrBot 全局时区，无效时回退到 `Asia/Shanghai`。
+- 已婚状态跨天保留，婚姻按连续 24 小时计算。婚姻期间不能换老婆；到期自动解除。
+- 修改婚期只影响之后新建立的婚姻。离婚后保留当前角色，可继续查看或在剩余次数内更换。
+- 默认每个群独立保存用户状态。选择 `state_scope=user` 后，同一平台、同一 Bot 下可跨群共享；切换范围会使用另一组状态，不会自动迁移。
+
+## QQ 官方 Bot：同一条 Markdown 图文
+
+启用 `qq_official_markdown` 后，角色文字与图片嵌入同一条原生 Markdown 消息，图片按比例显示。需要 Bot 具备原生 Markdown 发送权限；没有权限时请关闭该设置，使用普通图文。
+
+图片来自所选 monbed 镜像，QQ 也需要能访问该图片地址。`image_source` 可选择 `github`、`jsdelivr` 或 `jsdmirror`。本地缓存用于验证图片和普通图文发送；Markdown 内嵌图片使用对应的公网图片 URL。如果图片来源连接不佳，可以切换镜像。
+
+QQ 用户和群的 OpenID 按字符串处理，支持群聊、频道和私聊，不依赖 OneBot 的群成员接口。
+
+## 配置项
+
+配置在 AstrBot 插件面板中修改，保存后按面板提示重载。
+
+| 配置 | 默认值 | 说明 |
+|---|---|---|
+| `reply_mode` | `llm` | 二选一：`llm` 或 `template` |
+| `provider_id` | 留空 | 留空使用当前会话模型，也可指定模型提供商 |
+| `llm_timeout_seconds` | `45` | 模型等待上限，超时使用模板 |
+| `template_draw` | 上述默认模板 | 自定义首次抽取文案 |
+| `qq_official_markdown` | `true` | 官 Bot 使用单条 Markdown 图文 |
+| `enable_images` | `true` | 关闭后只回复文字 |
+| `image_source` | `github` | monbed 图片来源，可选 `jsdelivr` / `jsdmirror` |
+| `auto_refresh_catalog` | `true` | 启动时在后台检查角色清单 |
+| `refresh_interval_hours` | `24` | 已有清单缓存未到此间隔时，启动检查会跳过 |
+| `source_filters` | `[]` | 允许抽取的准确作品／分类标签；留空使用整个库 |
+| `exclude_characters` | `[]` | 排除姓名，或指定「出处!姓名」 |
+| `daily_hlp_limit` | `5` | 每天可更换次数；首次抽取不计入 |
+| `marriage_duration` | `7` | 新建立婚姻的维持天数 |
+| `state_scope` | `group` | `group` 分群保存；`user` 在同一 Bot 下跨群共享 |
+| `timezone` | 留空 | 跟随 AstrBot 全局时区，或显式填写 IANA 时区 |
+| `genie_tts_enabled` | `false` | 可选 GENIE 语音联动；仅 LLM 模式启用 |
+
+筛选示例：`source_filters` 填入 `赛马娘`、`可塑性记忆`、`anemoi`，只抽取这些来源。排除 `艾拉` 会排除所有同名角色；排除 `明日方舟!艾拉` 只影响这一条。筛选和排除设置只影响之后的随机抽取，已抽中或已婚角色仍可查看。
+
+## 角色库与数据
+
+唯一角色库是 [monbed/wife](https://github.com/monbed/wife)。2026-11-25 的内置快照含 **2,717 张图片路径**，合并同角色多图和 `Little_Busters` 标签后得到 **2,544 条记录**。记录数不等于严格核验后的独立角色人数：原库仍有系列标签、译名和合照，出处沿用图库标签，不由 LLM 猜测。
+
+用户状态、婚姻和最近历史使用 AstrBot 的插件 KV 存储；清单与图片缓存位于：
+
+```text
+data/plugin_data/astrbot_plugin_mywife/
+```
+
+插件使用独立的识别名、类名、事件标记和数据空间，不读取原插件的用户数据或图库。**原有命令名称仍相同，因此请停用其他使用 `jrlp`／`hlp`／「今日老婆」／「换老婆」的插件处理器，避免同名命令由其他插件先响应。** 原项目专用的外部多 Bot 协调服务不接入；本插件按平台、Bot、群和用户隔离状态。
+
+## 开发、来源与许可
+
+功能设计参考 [Set-suei/galgame-LLM-jrlp](https://github.com/Set-suei/galgame-LLM-jrlp)；本项目代码独立实现。角色元数据与图片来源感谢 [monbed/wife](https://github.com/monbed/wife)。仓库包含轻量清单，不包含原 galgame 图库或整个 monbed 图片包。
+
+插件代码采用 [MIT License](LICENSE)。monbed 清单保留其[原版权文本](data/LICENSE.monbed-wife)和[来源说明](data/NOTICE.md)。图片作品的版权归相应权利人；图库没有逐张作者、授权或内容分级字段，公开使用可通过作品筛选和角色排除整理适合自己机器人的角色池。
+
+开发验证：安装 `requirements.txt`、AstrBot 4.29.4、`pytest` 与 `ruff`，运行 `python -m pytest` 和 `ruff check .`。测试包含实际 SDK 消息类、双模式、并发状态、婚姻边界、图库缓存和单条 QQ Markdown payload。
+
+遇到问题请在本仓库提交 [Issue](https://github.com/Whereis-Alice/astrbot_plugin_mywife/issues)，说明 AstrBot 版本、平台、回复模式、触发指令和错误现象；请勿公开 API Key 或 Bot 凭据。

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.log
+*.zip
+.env
+.env.*
+data/*
+!data/catalog.txt
+!data/NOTICE.md
+!data/LICENSE.monbed-wife
