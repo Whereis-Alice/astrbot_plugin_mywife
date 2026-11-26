@@ -32,7 +32,7 @@
     "description": "QQ 官方 Bot 使用 Markdown 图文",
     "type": "bool",
     "default": true,
-    "hint": "文字与图片在同一条 Markdown 消息内；竖图使用不裁切的 240 × 180 px 横版预览，避免撑高气泡。需 QQ 原生 Markdown 权限。"
+    "hint": "文字与图片在同一条 Markdown 消息内。图片等比缩至 240 × 200 px 以内，不裁切或补边。需 QQ 原生 Markdown 权限。"
   },
   "qq_official_buttons": {
     "description": "QQ 官方 Bot 显示玩法快捷按钮",

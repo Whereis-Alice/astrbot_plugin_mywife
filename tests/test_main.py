@@ -192,14 +192,14 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.use_markdown_)
         self.assertEqual(len(result.chain), 1)
         self.assertIsInstance(result.chain[0], Plain)
-        self.assertIn("![角色图片 #240px #180px]", result.chain[0].text)
+        self.assertIn("![角色图片 #100px #200px]", result.chain[0].text)
         self.assertIn("Alice 的角色", result.chain[0].text)
         self.assertIn("qqbot-media://image/v1/", result.chain[0].text)
         self.assertNotIn("raw.githubusercontent.com", result.chain[0].text)
         _, uploaded = self.plugin.qq_images.get_image_url.await_args.args
         self.assertNotEqual(uploaded, original)
         with PILImage.open(uploaded) as preview:
-            self.assertEqual(preview.size, (240, 180))
+            self.assertEqual(preview.size, (100, 200))
         self.assertEqual(original.read_bytes(), original_bytes)
 
     async def test_failed_native_upload_falls_back_to_one_normal_text_image_chain(self):
@@ -216,7 +216,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(uploaded, original)
         self.assertEqual(Path(event.sent[0].chain[1].path), uploaded)
         with PILImage.open(uploaded) as preview:
-            self.assertEqual(preview.size, (240, 180))
+            self.assertEqual(preview.size, (100, 200))
 
     async def test_native_failure_does_not_show_markdown_escape_slashes(self):
         event = Event(platform="qq_official")

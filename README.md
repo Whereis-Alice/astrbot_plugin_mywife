@@ -78,7 +78,7 @@ LLM 模式不会在模型回复后拼接一段固定的角色介绍。模型请�
 
 ## QQ 官方 Bot：Markdown 和快捷按钮
 
-启用 `qq_official_markdown` 后，角色文字与图片嵌入同一条原生 Markdown 消息。Markdown 标记限制在 240 × 200 px 以内。为了避免部分客户端按气泡宽度拉大竖图，插件还会生成最大 240 × 180 px 的横向预览：竖图完整保留，左右补背景，不裁切人物。动画使用首帧，原图缓存不受影响。
+启用 `qq_official_markdown` 后，角色文字与图片嵌入同一条原生 Markdown 消息。图片按 [二次元抽抽乐](https://github.com/Whereis-Alice/astrbot_plugin_anime_draw) 的方式等比缩至 240 × 200 px 以内。Markdown 标注预览实际宽高，竖图保留原比例，小图不放大。有透明度的图片用 PNG，动画使用首帧。
 
 `qq_official_buttons` 默认开启，消息底部按状态显示「结婚」「换老婆」「历史」等按钮，历史可以翻页。也可以单独关闭按钮，继续使用 Markdown 图文。按钮仅原指令发送者可用，点击会发送对应的普通指令。已婚或换人次数用完时会省略不适用的按钮；离婚仍需主动输入指令。
 

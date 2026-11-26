@@ -256,8 +256,7 @@ class MyWifePlugin(ReplyMixin, Star):
         if self._closing:
             return
         if image and markdown:
-            # Some QQ clients fit the actual image to the card width. Send a
-            # compact preview there and on rich-media fallback.
+            # Use the scaled image itself for both Markdown and rich media.
             try:
                 async with self._qq_preview_slots:
                     image = await make_qq_preview(image, self.data_dir / "qq_previews")
