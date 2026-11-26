@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 
+QQ_MD_MAX_WIDTH = 480
+QQ_MD_MAX_HEIGHT = 420
+
 
 def unescape_markdown_text(text: str) -> str:
     """Keep literal nickname/source punctuation when falling back to plain text."""
@@ -16,7 +19,7 @@ def qq_markdown(
     body = "\n".join("> " + line if line else ">" for line in text.strip().splitlines())
     if image_url and size:
         width, height = size
-        scale = min(1.0, 640 / max(1, width), 960 / max(1, height))
+        scale = min(1.0, QQ_MD_MAX_WIDTH / max(1, width), QQ_MD_MAX_HEIGHT / max(1, height))
         width, height = max(1, round(width * scale)), max(1, round(height * scale))
         body += f"\n\n![角色图片 #{width}px #{height}px]({image_url})"
     return body + "\n"

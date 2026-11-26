@@ -32,13 +32,13 @@
     "description": "QQ 官方 Bot 使用 Markdown 图文",
     "type": "bool",
     "default": true,
-    "hint": "文字与图片在同一条 Markdown 消息内；需官方 Bot 原生 Markdown 权限。不可用时使用普通图文。"
+    "hint": "文字与图片在同一条 Markdown 消息内；图片按比例缩小，显示宽高最多 480 × 420 px。需官方 Bot 原生 Markdown 权限。不可用时使用普通图文。"
   },
   "qq_official_buttons": {
     "description": "QQ 官方 Bot 显示玩法快捷按钮",
     "type": "bool",
     "default": true,
-    "hint": "需同时开启 QQ Markdown，且 Bot 具备 QQ 键盘权限。按钮用于输入玩法指令。"
+    "hint": "默认开启。关闭后仍保留 QQ Markdown 图文。使用按钮需开启 QQ Markdown，且 Bot 具备 QQ 键盘权限。"
   },
   "enable_images": {
     "description": "发送角色图片",

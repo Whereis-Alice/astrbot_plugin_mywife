@@ -184,7 +184,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.use_markdown_)
         self.assertEqual(len(result.chain), 1)
         self.assertIsInstance(result.chain[0], Plain)
-        self.assertIn("![角色图片 #480px #960px]", result.chain[0].text)
+        self.assertIn("![角色图片 #210px #420px]", result.chain[0].text)
         self.assertIn("Alice 的角色", result.chain[0].text)
         self.assertIn("qqbot-media://image/v1/", result.chain[0].text)
         self.assertNotIn("raw.githubusercontent.com", result.chain[0].text)
