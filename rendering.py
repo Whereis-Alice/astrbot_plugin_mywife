@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
-QQ_MD_MAX_WIDTH = 480
-QQ_MD_MAX_HEIGHT = 420
+QQ_MD_MAX_WIDTH = 240
+QQ_MD_MAX_HEIGHT = 200
 
 
 def unescape_markdown_text(text: str) -> str:

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import At, Image, Plain
+from PIL import Image as PILImage
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "mywife_test_plugin"
@@ -170,11 +171,18 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         other_bot.get_platform_id = lambda: "other-instance"
         self.assertNotEqual(self.plugin._state_key(private), self.plugin._state_key(other_bot))
 
+    def make_portrait(self):
+        path = self.data / "image.png"
+        with PILImage.new("RGB", (360, 720), (120, 100, 70)) as original:
+            original.save(path)
+        self.plugin.config["enable_images"] = True
+        self.plugin.images.get_image = AsyncMock(return_value=path)
+        return path
+
     async def test_qq_markdown_text_and_image_are_one_plain_markdown_payload(self):
         event = Event(platform="qq_official")
-        self.plugin.config["enable_images"] = True
-        self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
-        self.plugin.images.image_dimensions = AsyncMock(return_value=(1000, 2000))
+        original = self.make_portrait()
+        original_bytes = original.read_bytes()
         self.plugin.qq_images.get_image_url = AsyncMock(
             return_value="qqbot-media://image/v1/mywife-native-image"
         )
@@ -184,16 +192,19 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.use_markdown_)
         self.assertEqual(len(result.chain), 1)
         self.assertIsInstance(result.chain[0], Plain)
-        self.assertIn("![角色图片 #210px #420px]", result.chain[0].text)
+        self.assertIn("![角色图片 #240px #180px]", result.chain[0].text)
         self.assertIn("Alice 的角色", result.chain[0].text)
         self.assertIn("qqbot-media://image/v1/", result.chain[0].text)
         self.assertNotIn("raw.githubusercontent.com", result.chain[0].text)
+        _, uploaded = self.plugin.qq_images.get_image_url.await_args.args
+        self.assertNotEqual(uploaded, original)
+        with PILImage.open(uploaded) as preview:
+            self.assertEqual(preview.size, (240, 180))
+        self.assertEqual(original.read_bytes(), original_bytes)
 
     async def test_failed_native_upload_falls_back_to_one_normal_text_image_chain(self):
         event = Event(platform="qq_official")
-        self.plugin.config["enable_images"] = True
-        self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
-        self.plugin.images.image_dimensions = AsyncMock(return_value=(8, 8))
+        original = self.make_portrait()
         self.plugin.qq_images.get_image_url = AsyncMock(return_value=None)
         await self.plugin._send(event, "角色结果", {"image_path": "img1/A!B.jpg"})
         self.assertEqual(len(event.sent), 1)
@@ -201,12 +212,15 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(event.sent[0].chain[0], Plain)
         self.assertIsInstance(event.sent[0].chain[1], Image)
         self.assertNotIn("http", event.sent[0].chain[0].text)
+        _, uploaded = self.plugin.qq_images.get_image_url.await_args.args
+        self.assertNotEqual(uploaded, original)
+        self.assertEqual(Path(event.sent[0].chain[1].path), uploaded)
+        with PILImage.open(uploaded) as preview:
+            self.assertEqual(preview.size, (240, 180))
 
     async def test_native_failure_does_not_show_markdown_escape_slashes(self):
         event = Event(platform="qq_official")
-        self.plugin.config["enable_images"] = True
-        self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
-        self.plugin.images.image_dimensions = AsyncMock(return_value=(8, 8))
+        self.make_portrait()
         self.plugin.qq_images.get_image_url = AsyncMock(return_value=None)
         await self.plugin._send(
             event, r"Alice\_Isla\[星\]，老婆是角色\*甲", {"image_path": "img1/A!B.jpg"}
@@ -215,12 +229,26 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_normal_platform_keeps_one_text_and_image_chain(self):
         event = Event()
-        self.plugin.config["enable_images"] = True
-        self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
+        original = self.make_portrait()
         await self.plugin._send(event, "result", {"image_path": "img1/A!B.jpg"})
         self.assertEqual(len(event.sent), 1)
         self.assertIsInstance(event.sent[0].chain[0], Plain)
         self.assertIsInstance(event.sent[0].chain[1], Image)
+        self.assertEqual(Path(event.sent[0].chain[1].path), original)
+
+    async def test_qq_preview_failure_keeps_text_and_never_sends_tall_original(self):
+        event = Event(platform="qq_official")
+        self.make_portrait()
+        self.plugin.qq_images.get_image_url = AsyncMock()
+        with patch.object(module, "make_qq_preview", side_effect=OSError):
+            await self.plugin._send(event, "Alice", {"image_path": "img1/A!B.jpg"})
+        self.plugin.qq_images.get_image_url.assert_not_awaited()
+        self.assertEqual(len(event.sent), 1)
+        self.assertEqual(len(event.sent[0].chain), 1)
+        body = event.sent[0].chain[0]
+        self.assertIsInstance(body, Plain)
+        self.assertIn("Alice", body.text)
+        self.assertNotIn("![", body.text)
 
     async def test_image_failure_keeps_business_text(self):
         event = Event(platform="qq_official")
@@ -232,9 +260,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_official_markdown_rejection_falls_back_to_plain_picture_and_commands(self):
         event = Event(platform="qq_official")
-        self.plugin.config["enable_images"] = True
-        self.plugin.images.get_image = AsyncMock(return_value=self.data / "image.png")
-        self.plugin.images.image_dimensions = AsyncMock(return_value=(8, 8))
+        self.make_portrait()
         self.plugin.qq_images.get_image_url = AsyncMock(return_value="qqbot-media://image/v1/image")
         with patch.object(module, "send_qq_markdown", return_value=False) as send:
             await self.plugin._send(
@@ -245,6 +271,8 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.use_markdown_)
         self.assertEqual(len(result.chain), 2)
         self.assertIn("jrlp 历史", result.chain[0].text)
+        _, uploaded = self.plugin.qq_images.get_image_url.await_args.args
+        self.assertEqual(Path(result.chain[1].path), uploaded)
 
     async def test_official_button_setting_and_exhausted_redraws(self):
         event = Event(platform="qq_official")

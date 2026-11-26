@@ -21,6 +21,7 @@ from .catalog import Catalog
 from .domain import parse_command
 from .image_store import ImageStore
 from .qq_media import OFFICIAL_PLATFORMS, QQMediaStore, send_qq_markdown
+from .qq_preview import make_qq_preview
 from .rendering import qq_markdown, unescape_markdown_text
 from .replies import QuickActions, ReplyMixin, escape_markdown_field, quick_actions
 from .storage import WifeStore
@@ -47,6 +48,7 @@ class MyWifePlugin(ReplyMixin, Star):
         self.catalog = Catalog(self.data_dir, config)
         self.images = ImageStore(self.data_dir, config)
         self.qq_images = QQMediaStore(self.data_dir)
+        self._qq_preview_slots = asyncio.Semaphore(2)
         self.store = WifeStore(self.data_dir / "records.sqlite3", self._legacy_records)
         self._dashboard: Dashboard | None = None
         self._refresh_task: asyncio.Task | None = None
@@ -253,14 +255,25 @@ class MyWifePlugin(ReplyMixin, Star):
         buttons = actions if markdown and self.config.get("qq_official_buttons", True) else ()
         if self._closing:
             return
+        if image and markdown:
+            # Some QQ clients fit the actual image to the card width. Send a
+            # compact preview there and on rich-media fallback.
+            try:
+                async with self._qq_preview_slots:
+                    image = await make_qq_preview(image, self.data_dir / "qq_previews")
+            except Exception as exc:
+                logger.warning("[我老婆] QQ 预览生成失败：%s", type(exc).__name__)
+                image = None
+        if self._closing:
+            return
         if markdown:
             # QQ clients can reject external GitHub/CDN pictures even when
             # the bot downloaded them successfully. Use QQ-owned media instead.
             image_url, size = None, None
-            if image and path:
+            if image:
                 try:
-                    image_url = await self.qq_images.get_image_url(event, image)
                     size = await self.images.image_dimensions(image)
+                    image_url = await self.qq_images.get_image_url(event, image)
                 except Exception as exc:
                     logger.warning("[我老婆] QQ 图片处理失败：%s", type(exc).__name__)
             if self._closing:

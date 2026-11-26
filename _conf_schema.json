@@ -32,7 +32,7 @@
     "description": "QQ 官方 Bot 使用 Markdown 图文",
     "type": "bool",
     "default": true,
-    "hint": "文字与图片在同一条 Markdown 消息内；图片按比例缩小，显示宽高最多 480 × 420 px。需官方 Bot 原生 Markdown 权限。不可用时使用普通图文。"
+    "hint": "文字与图片在同一条 Markdown 消息内；竖图使用不裁切的 240 × 180 px 横版预览，避免撑高气泡。需 QQ 原生 Markdown 权限。"
   },
   "qq_official_buttons": {
     "description": "QQ 官方 Bot 显示玩法快捷按钮",
@@ -55,7 +55,7 @@
       "jsdelivr",
       "jsdmirror"
     ],
-    "hint": "Bot 从 monbed/wife 下载原图；GitHub 连接不佳可尝试镜像。QQ Markdown 图片会先上传到 QQ 官方存储。"
+    "hint": "Bot 从 monbed/wife 下载原图；GitHub 连接不佳可尝试镜像。QQ Markdown 使用上传到 QQ 官方存储的紧凑预览。"
   },
   "auto_refresh_catalog": {
     "description": "启动时检查在线角色清单",
