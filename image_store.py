@@ -98,6 +98,8 @@ def _read_dimensions(path: Path) -> tuple[int, int]:
                 or image.width * image.height > MAX_IMAGE_PIXELS
             ):
                 raise ValueError("Invalid image dimensions")
+            if image.getexif().get(274) in (5, 6, 7, 8):
+                return image.height, image.width
             return image.width, image.height
 
 

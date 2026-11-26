@@ -1,4 +1,4 @@
-"""Create compact, full-frame previews for QQ Markdown and its fallback."""
+"""Create compact, full-frame previews for ordinary QQ image replies."""
 
 from __future__ import annotations
 

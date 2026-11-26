@@ -196,11 +196,9 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Alice 的角色", result.chain[0].text)
         self.assertIn("qqbot-media://image/v1/", result.chain[0].text)
         self.assertNotIn("raw.githubusercontent.com", result.chain[0].text)
-        _, uploaded = self.plugin.qq_images.get_image_url.await_args.args
-        self.assertNotEqual(uploaded, original)
-        with PILImage.open(uploaded) as preview:
-            self.assertEqual(preview.size, (100, 200))
+        self.plugin.qq_images.get_image_url.assert_awaited_once_with(event, original)
         self.assertEqual(original.read_bytes(), original_bytes)
+        self.assertFalse((self.data / "qq_previews").exists())
 
     async def test_failed_native_upload_falls_back_to_one_normal_text_image_chain(self):
         event = Event(platform="qq_official")
@@ -212,10 +210,10 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(event.sent[0].chain[0], Plain)
         self.assertIsInstance(event.sent[0].chain[1], Image)
         self.assertNotIn("http", event.sent[0].chain[0].text)
-        _, uploaded = self.plugin.qq_images.get_image_url.await_args.args
-        self.assertNotEqual(uploaded, original)
-        self.assertEqual(Path(event.sent[0].chain[1].path), uploaded)
-        with PILImage.open(uploaded) as preview:
+        self.plugin.qq_images.get_image_url.assert_awaited_once_with(event, original)
+        fallback = Path(event.sent[0].chain[1].path)
+        self.assertNotEqual(fallback, original)
+        with PILImage.open(fallback) as preview:
             self.assertEqual(preview.size, (100, 200))
 
     async def test_native_failure_does_not_show_markdown_escape_slashes(self):
@@ -238,11 +236,11 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_qq_preview_failure_keeps_text_and_never_sends_tall_original(self):
         event = Event(platform="qq_official")
-        self.make_portrait()
-        self.plugin.qq_images.get_image_url = AsyncMock()
+        original = self.make_portrait()
+        self.plugin.qq_images.get_image_url = AsyncMock(return_value=None)
         with patch.object(module, "make_qq_preview", side_effect=OSError):
             await self.plugin._send(event, "Alice", {"image_path": "img1/A!B.jpg"})
-        self.plugin.qq_images.get_image_url.assert_not_awaited()
+        self.plugin.qq_images.get_image_url.assert_awaited_once_with(event, original)
         self.assertEqual(len(event.sent), 1)
         self.assertEqual(len(event.sent[0].chain), 1)
         body = event.sent[0].chain[0]
@@ -260,7 +258,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_official_markdown_rejection_falls_back_to_plain_picture_and_commands(self):
         event = Event(platform="qq_official")
-        self.make_portrait()
+        original = self.make_portrait()
         self.plugin.qq_images.get_image_url = AsyncMock(return_value="qqbot-media://image/v1/image")
         with patch.object(module, "send_qq_markdown", return_value=False) as send:
             await self.plugin._send(
@@ -271,8 +269,10 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.use_markdown_)
         self.assertEqual(len(result.chain), 2)
         self.assertIn("jrlp 历史", result.chain[0].text)
-        _, uploaded = self.plugin.qq_images.get_image_url.await_args.args
-        self.assertEqual(Path(result.chain[1].path), uploaded)
+        self.plugin.qq_images.get_image_url.assert_awaited_once_with(event, original)
+        self.assertNotEqual(Path(result.chain[1].path), original)
+        with PILImage.open(result.chain[1].path) as preview:
+            self.assertEqual(preview.size, (100, 200))
 
     async def test_official_button_setting_and_exhausted_redraws(self):
         event = Event(platform="qq_official")

@@ -117,6 +117,15 @@ class ImageStoreTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 store.public_url(path)
 
+    async def test_display_dimensions_honor_exif_orientation(self) -> None:
+        store, _ = self.make_store(FakeResponse(self.png))
+        path = self.root.parent / "orientation.jpg"
+        with Image.new("RGB", (40, 20), "red") as image:
+            exif = image.getexif()
+            exif[274] = 6
+            image.save(path, exif=exif)
+        self.assertEqual(await store.image_dimensions(path), (20, 40))
+
     async def test_html_and_oversized_response_not_cached(self) -> None:
         for body, length in (
             (b"<html>error</html>", None),

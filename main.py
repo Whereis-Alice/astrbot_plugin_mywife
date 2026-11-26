@@ -252,19 +252,9 @@ class MyWifePlugin(ReplyMixin, Star):
         buttons = actions if markdown and self.config.get("qq_official_buttons", True) else ()
         if self._closing:
             return
-        if image and markdown:
-            # Use the scaled image itself for both Markdown and rich media.
-            try:
-                async with self._qq_preview_slots:
-                    image = await make_qq_preview(image, self.data_dir / "qq_previews")
-            except Exception as exc:
-                logger.warning("[我老婆] QQ 预览生成失败：%s", type(exc).__name__)
-                image = None
-        if self._closing:
-            return
         if markdown:
-            # QQ clients can reject external GitHub/CDN pictures even when
-            # the bot downloaded them successfully. Use QQ-owned media instead.
+            # The Markdown tag sets the display size. Upload the source bytes
+            # so the client can render at its screen's pixel density.
             image_url, size = None, None
             if image:
                 try:
@@ -291,9 +281,19 @@ class MyWifePlugin(ReplyMixin, Star):
                     return
             else:
                 logger.warning("[我老婆] QQ Markdown 图片上传暂不可用，使用普通图文。")
+            if image:
+                # Plain image messages have no Markdown dimensions.
+                try:
+                    async with self._qq_preview_slots:
+                        image = await make_qq_preview(image, self.data_dir / "qq_previews")
+                except Exception as exc:
+                    logger.warning("[我老婆] QQ 降级图片生成失败：%s", type(exc).__name__)
+                    image = None
             text = unescape_markdown_text(text)
             if buttons:
                 text += "\n快捷指令：" + " · ".join(command for _, command in buttons)
+        if self._closing:
+            return
         try:
             await event.send(self._result(event, text, image=image, markdown=False))
         except Exception as exc:
