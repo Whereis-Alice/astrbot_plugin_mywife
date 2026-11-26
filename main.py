@@ -199,13 +199,10 @@ class MyWifePlugin(ReplyMixin, Star):
             self.marriage_duration,
             self._choose,
         )
-        can_redraw = values.pop("can_redraw", None)
-        if can_redraw and character:
-            can_redraw = any(role.id != character.get("id") for role in self.catalog.get_filtered())
         text = await self._reply(
             event, scenario, event.get_sender_name() or "你", character, **values
         )
-        return text, character, quick_actions(scenario, can_redraw=can_redraw)
+        return text, character, quick_actions(scenario)
 
     @staticmethod
     def _directed_to_other(event: AstrMessageEvent) -> bool:

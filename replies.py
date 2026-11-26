@@ -53,16 +53,14 @@ SCENARIO_VALUE_KEYS: dict[str, tuple[str, ...]] = {
 QuickActions = tuple[tuple[str, str], ...]
 
 
-def quick_actions(scenario: str, *, can_redraw: bool | None = None) -> QuickActions:
-    """Suggest valid next commands for the result the player just received."""
+def quick_actions(scenario: str) -> QuickActions:
+    """Show shortcuts for the result the player just received."""
     draw = ("今日老婆", "jrlp")
     history = ("历史", "jrlp 历史")
     marry = ("结婚", "jrlp 结婚")
     redraw = ("换老婆", "hlp")
-    if scenario in {"draw", "again", "redraw", "divorce"}:
-        return (marry, history) if can_redraw is False else (marry, redraw, history)
-    if scenario in {"limit", "no_alternative"}:
-        return (marry, history)
+    if scenario in {"draw", "again", "redraw", "divorce", "limit", "no_alternative"}:
+        return (marry, redraw, history)
     if scenario in {"marry", "married", "blocked"}:
         # Keep divorce an explicit command; clicking a navigation button
         # should never accidentally end a marriage.

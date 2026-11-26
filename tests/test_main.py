@@ -279,9 +279,19 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.config["daily_hlp_limit"] = 1
         with patch.object(module, "send_qq_markdown", return_value=True) as send:
             await self.plugin._dispatch(event)
-            self.assertIn(("换老婆", "hlp"), send.await_args.args[2])
+            self.assertEqual(send.await_args.args[2][1], ("换老婆", "hlp"))
             await self.plugin._dispatch(Event("hlp", platform="qq_official"))
-            self.assertEqual([label for label, _ in send.await_args.args[2]], ["结婚", "历史"])
+            await self.plugin._dispatch(Event("jrlp", platform="qq_official"))
+            self.assertEqual(
+                [label for label, _ in send.await_args.args[2]],
+                [
+                    "结婚",
+                    "换老婆",
+                    "历史",
+                ],
+            )
+            await self.plugin._dispatch(Event("hlp", platform="qq_official"))
+            self.assertIn("用完", send.await_args.args[1])
             self.plugin.config["qq_official_buttons"] = False
             await self.plugin._dispatch(Event("jrlp", platform="qq_official"))
             self.assertEqual(send.await_args.args[2], ())

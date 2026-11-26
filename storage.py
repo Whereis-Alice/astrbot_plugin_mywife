@@ -285,9 +285,6 @@ class WifeStore:
             row = self._get_row(db, key)
             state = self._player_state(row, day, now)
             scenario, character, values = change_state(state, action, now, limit, duration, choose)
-            values["can_redraw"] = bool(
-                state["wife"] and not state["marriage"] and state["redraw_count"] < limit
-            )
             draws = (row["draws"] if row else 0) + (scenario in DRAW_ACTIONS)
             identity = _identity_fields(identity)
             state_changed = row is not None and (

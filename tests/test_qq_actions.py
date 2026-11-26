@@ -142,7 +142,7 @@ async def test_other_platforms_and_unsupported_raw_sources_keep_normal_dispatch(
 
 
 def test_suggested_actions_fit_the_result_and_do_not_end_marriages():
-    assert [label for label, _ in quick_actions("draw", can_redraw=False)] == ["结婚", "历史"]
-    assert [label for label, _ in quick_actions("limit")] == ["结婚", "历史"]
+    for scenario in ("draw", "again", "redraw", "limit", "no_alternative"):
+        assert [label for label, _ in quick_actions(scenario)] == ["结婚", "换老婆", "历史"]
     assert [label for label, _ in quick_actions("married")] == ["历史"]
     assert [label for label, _ in quick_actions("no_wife")] == ["今日老婆"]
