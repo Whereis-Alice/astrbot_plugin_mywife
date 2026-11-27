@@ -246,7 +246,7 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
         store, _ = self.make_store()
         store._qq_request.side_effect = [
             {
-                "total": 2,
+                "total": "2",
                 "images": [{"image_id": "own", "file_name": f"mywife-{'a' * 32}.jpg"}],
                 "next_cursor": "next",
             },
@@ -267,9 +267,9 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await store.get_image_url(event, self.image), MEDIA_URL)
                 store._qq_request.reset_mock(side_effect=True)
                 store._qq_request.side_effect = [
-                    {"total": 2, "images": [own, other]},
+                    {"total": "2", "images": [own, other]},
                     *([{}, {}] if clear_all else [{}]),
-                    {"total": 0 if clear_all else 1},
+                    {"total": "0" if clear_all else "1"},
                 ]
                 status = await store.clear_materials(event, all_materials=clear_all)
                 self.assertEqual(
@@ -302,12 +302,12 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
         old = int(time.time()) - qq_media.MIN_RECLAIM_AGE - 10
         name = f"mywife-{'a' * 32}.png"
         listed = {
-            "total": 90,
+            "total": "90",
             "images": [
-                {"image_id": "old-1", "file_name": name, "created_at": old},
-                {"image_id": "old-2", "file_name": name, "created_at": old + 1},
-                {"image_id": "recent", "file_name": name, "created_at": int(time.time())},
-                {"image_id": "other", "file_name": "another-plugin.jpg", "created_at": old},
+                {"image_id": "old-1", "file_name": name, "created_at": str(old)},
+                {"image_id": "old-2", "file_name": name, "created_at": str(old + 1)},
+                {"image_id": "recent", "file_name": name, "created_at": str(int(time.time()))},
+                {"image_id": "other", "file_name": "another-plugin.jpg", "created_at": str(old)},
             ],
         }
         store._qq_request.side_effect = [

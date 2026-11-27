@@ -171,6 +171,13 @@ def _image_id(value: Any) -> str:
     )
 
 
+def _material_number(value: Any) -> int | None:
+    # The live QQ API serializes its 64-bit integers as decimal strings.
+    if isinstance(value, str) and 0 < len(value) <= 20 and value.isascii() and value.isdecimal():
+        value = int(value)
+    return value if type(value) is int and 0 <= value < 2**64 else None
+
+
 def _expiry(receipt: dict[str, Any], now: float) -> float:
     ttl = float(FALLBACK_CACHE_TTL_SECONDS)
     try:
@@ -538,8 +545,8 @@ class QQMediaStore:
 
     @staticmethod
     def _material_total(page: dict[str, Any]) -> int:
-        total = page.get("total")
-        if type(total) is not int or total < 0:
+        total = _material_number(page.get("total"))
+        if total is None:
             raise ValueError("QQ material listing has no valid total")
         return total
 
@@ -558,13 +565,14 @@ class QQMediaStore:
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                name, created = item.get("file_name"), item.get("created_at")
+                name = item.get("file_name")
+                created = _material_number(item.get("created_at"))
                 image_id = _image_id(item.get("image_id"))
                 if image_id not in {"", ".", ".."}:
                     materials[image_id] = _Material(
                         image_id,
                         isinstance(name, str) and bool(OWN_MATERIAL.fullmatch(name)),
-                        created if type(created) is int and created > 0 else None,
+                        created or None,
                     )
             cursor = page.get("next_cursor", "")
             if cursor == "":
