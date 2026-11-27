@@ -345,6 +345,57 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.catalog.refresh.assert_not_awaited()
         self.assertIn("管理员", event.sent[0].chain[0].text)
 
+    async def test_qq_material_clear_requires_admin_correct_platform_and_exact_confirmation(self):
+        self.plugin.qq_images.clear_materials = AsyncMock()
+        self.plugin.qq_images.material_status = AsyncMock()
+        for platform, admin, argument, notice in (
+            ("qq_official", False, "", "管理员"),
+            ("qq_official", False, "清空本插件", "管理员"),
+            ("qq_official", False, "清空全部 确认", "管理员"),
+            ("aiocqhttp", True, "清空全部 确认", "QQ 官方 Bot 会话"),
+            ("qq_official", True, "清空全部", "包含其他插件"),
+            ("qq_official", True, "清空全部 确认一下", "清空全部 确认"),
+        ):
+            with self.subTest(platform=platform, admin=admin, argument=argument):
+                event = Event(f"jrlp 素材额度 {argument}", platform=platform)
+                if admin:
+                    event.is_admin = lambda: True
+                await self.plugin._dispatch(event)
+                self.assertEqual(len(event.sent), 1)
+                self.assertIn(notice, event.sent[0].chain[0].text)
+        self.plugin.qq_images.clear_materials.assert_not_awaited()
+        self.plugin.qq_images.material_status.assert_not_awaited()
+
+    async def test_qq_admin_status_and_clear_use_current_bot_and_report_partial_results(self):
+        self.plugin.qq_images.material_status = AsyncMock(
+            return_value=types.SimpleNamespace(total=96, owned=33, limit=100)
+        )
+        self.plugin.qq_images.clear_materials = AsyncMock(
+            side_effect=[
+                types.SimpleNamespace(removed=32, failed=1, remaining=64),
+                types.SimpleNamespace(removed=64, failed=0, remaining=None),
+            ]
+        )
+        query = Event("jrlp 素材额度", platform="qq_official")
+        own = Event("jrlp 素材额度 清空本插件", platform="qq_official_webhook")
+        all_materials = Event("jrlp 素材额度 清空全部 确认", platform="qq_official")
+        for event in (query, own, all_materials):
+            event.is_admin = lambda: True
+            await self.plugin._dispatch(event)
+        self.plugin.qq_images.material_status.assert_awaited_once_with(query)
+        self.assertEqual(
+            [
+                (call.args[0], call.kwargs["all_materials"])
+                for call in self.plugin.qq_images.clear_materials.await_args_list
+            ],
+            [(own, False), (all_materials, True)],
+        )
+        self.assertIn("96/100", query.sent[0].chain[0].text)
+        self.assertIn("33 张", query.sent[0].chain[0].text)
+        self.assertIn("已移除 32 张，失败 1 张", own.sent[0].chain[0].text)
+        self.assertIn("还剩 64 张", own.sent[0].chain[0].text)
+        self.assertIn("暂时无法确认剩余数量", all_materials.sent[0].chain[0].text)
+
 
 if __name__ == "__main__":
     unittest.main()

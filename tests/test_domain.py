@@ -32,6 +32,13 @@ class DomainTests(unittest.TestCase):
         for text in ("jrlplugin", "我想换老婆", "今天可以结婚吗", "hello"):
             self.assertIsNone(parse_command(text))
 
+    def test_qq_material_management_arguments_reach_the_command_handler(self):
+        self.assertEqual(parse_command("jrlp 素材额度"), ("qq_materials", ""))
+        self.assertEqual(parse_command("/jrlp 素材额度 清空本插件"), ("qq_materials", "清空本插件"))
+        self.assertEqual(
+            parse_command("今日老婆 素材额度 清空全部   确认"), ("qq_materials", "清空全部 确认")
+        )
+
     def test_first_draw_does_not_consume_redraw_and_limit_is_exact(self):
         state = prepare_state({}, "2026-11-25", 100)
 

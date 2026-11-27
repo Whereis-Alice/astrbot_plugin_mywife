@@ -93,11 +93,15 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def make_store(self, *, receipt=None, presigned=COS_URL, etag=None, gate=None):
+    def make_store(
+        self, *, receipt=None, presigned=COS_URL, etag=None, gate=None, check_quota=False
+    ):
         store = qq_media.QQMediaStore(self.data_dir)
         complete = receipt or {"url": MEDIA_URL, "image_id": "own.image:1"}
         receipts = [{"presigned_url": presigned, "upload_id": "upload-1"}, complete] * 8
         store._qq_request = AsyncMock(side_effect=receipts)
+        if not check_quota:
+            store._auto_clear_quota = AsyncMock()
         session = FakeSession(
             FakeResponse(etag if etag is not None else f'"{self.md5}"', gate=gate)
         )
@@ -169,7 +173,10 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
             picture.save(other_image)
         store._qq_request.reset_mock(side_effect=True)
         quota = qq_media._MediaError(400, qq_media.IMAGE_QUOTA_EXCEEDED)
-        foreign = {"images": [{"file_name": "other-plugin.png", "image_id": "foreign"}]}
+        foreign = {
+            "total": 1,
+            "images": [{"file_name": "other-plugin.png", "image_id": "foreign"}],
+        }
         store._qq_request.side_effect = [quota, foreign, quota, foreign]
         self.assertIsNone(await store.get_image_url(event, other_image))
         self.assertIsNone(await store.get_image_url(event, other_image))
@@ -195,6 +202,7 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
         store._qq_request.side_effect = [
             qq_media._MediaError(400, qq_media.IMAGE_QUOTA_EXCEEDED),
             {
+                "total": 4,
                 "images": [
                     {"file_name": owned_name, "image_id": "recent", "created_at": recent},
                     {"file_name": owned_name, "image_id": "own-2", "created_at": old + 1},
@@ -233,6 +241,94 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
         reloaded = qq_media.QQMediaStore(self.data_dir)
         self.addAsyncCleanup(reloaded.close)
         self.assertEqual([item["image_id"] for item in reloaded._cache.values()], ["own.new"])
+
+    async def test_material_status_counts_only_owned_files_across_pages(self):
+        store, _ = self.make_store()
+        store._qq_request.side_effect = [
+            {
+                "total": 2,
+                "images": [{"image_id": "own", "file_name": f"mywife-{'a' * 32}.jpg"}],
+                "next_cursor": "next",
+            },
+            {"images": [{"image_id": "other", "file_name": "another-plugin.jpg"}]},
+        ]
+        self.assertEqual(await store.material_status(FakeEvent()), qq_media.MaterialStatus(2, 1))
+        self.assertTrue(
+            all(call.kwargs == {"method": "GET"} for call in store._qq_request.await_args_list)
+        )
+
+    async def test_manual_clear_scopes_the_delete_and_reports_verified_remaining(self):
+        own = {"image_id": "own.image:1", "file_name": f"mywife-{'a' * 32}.png"}
+        other = {"image_id": "other", "file_name": "another-plugin.jpg"}
+        for clear_all in (False, True):
+            with self.subTest(clear_all=clear_all):
+                store, _ = self.make_store()
+                event = FakeEvent()
+                self.assertEqual(await store.get_image_url(event, self.image), MEDIA_URL)
+                store._qq_request.reset_mock(side_effect=True)
+                store._qq_request.side_effect = [
+                    {"total": 2, "images": [own, other]},
+                    *([{}, {}] if clear_all else [{}]),
+                    {"total": 0 if clear_all else 1},
+                ]
+                status = await store.clear_materials(event, all_materials=clear_all)
+                self.assertEqual(
+                    status,
+                    qq_media.MaterialClearResult(2 if clear_all else 1, 0, 0 if clear_all else 1),
+                )
+                deleted = [
+                    call.args[1].split("/")[-2]
+                    for call in store._qq_request.await_args_list
+                    if call.kwargs.get("method") == "DELETE"
+                ]
+                self.assertEqual(
+                    deleted, ["own.image%3A1", "other"] if clear_all else ["own.image%3A1"]
+                )
+                self.assertEqual(store._cache, {})
+
+    async def test_manual_clear_reports_partial_failure_and_uncertain_remaining(self):
+        store, _ = self.make_store()
+        store._qq_request.side_effect = [
+            {"total": 2, "images": [{"image_id": "0"}, {"image_id": "1"}]},
+            {},
+            qq_media._MediaError(429),
+            TimeoutError(),
+        ]
+        result = await store.clear_materials(FakeEvent(), all_materials=True)
+        self.assertEqual(result, qq_media.MaterialClearResult(1, 1, None))
+
+    async def test_near_full_auto_cleanup_deletes_only_old_owned_materials_before_upload(self):
+        store, session = self.make_store(check_quota=True)
+        old = int(time.time()) - qq_media.MIN_RECLAIM_AGE - 10
+        name = f"mywife-{'a' * 32}.png"
+        listed = {
+            "total": 90,
+            "images": [
+                {"image_id": "old-1", "file_name": name, "created_at": old},
+                {"image_id": "old-2", "file_name": name, "created_at": old + 1},
+                {"image_id": "recent", "file_name": name, "created_at": int(time.time())},
+                {"image_id": "other", "file_name": "another-plugin.jpg", "created_at": old},
+            ],
+        }
+        store._qq_request.side_effect = [
+            listed,
+            {},
+            {},
+            {"presigned_url": COS_URL, "upload_id": "upload-1"},
+            {"url": MEDIA_URL, "image_id": "new"},
+        ]
+        self.assertEqual(await store.get_image_url(FakeEvent(), self.image), MEDIA_URL)
+        self.assertEqual(
+            [call.args[1] for call in store._qq_request.await_args_list],
+            [
+                "/v2/media-images",
+                "/v2/media-images/old-1/delete",
+                "/v2/media-images/old-2/delete",
+                "/v2/media-images/prepare",
+                "/v2/media-images/complete",
+            ],
+        )
+        self.assertEqual(session.calls[0][1]["data"], self.data)
 
     async def test_different_platform_or_account_does_not_reuse_media(self):
         store, _ = self.make_store()

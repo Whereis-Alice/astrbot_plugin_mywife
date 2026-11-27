@@ -39,8 +39,13 @@ IMAGE_ALREADY_GONE = 40035008
 QUOTA_RETRY_SECONDS = 300
 MATERIALS_PATH = "/v2/media-images"
 OWN_MATERIAL = re.compile(r"mywife-[0-9a-f]{32}\.(?:jpg|png|gif|webp)")
+MATERIAL_LIMIT = 100
+AUTO_CLEAR_AT = 90
 MIN_RECLAIM_AGE = 600
 MAX_MATERIAL_PAGES = 12
+MATERIAL_DELETE_BATCH = 4
+MATERIAL_CLEAR_TIMEOUT = 45
+_MATERIAL_ERRORS = (aiohttp.ClientError, OSError, ValueError, RuntimeError, TimeoutError)
 # QQ's completion receipt currently reports a 90-day TTL. A missing TTL gets a
 # conservative one-hour fallback instead; neither policy extends server expiry.
 MAX_MEDIA_TTL_SECONDS = 90 * 86400
@@ -78,6 +83,27 @@ class _Picture:
     md5: str
     sha1: str
     sha256: str
+
+
+@dataclass(frozen=True)
+class MaterialStatus:
+    total: int
+    owned: int
+    limit: int = MATERIAL_LIMIT
+
+
+@dataclass(frozen=True)
+class MaterialClearResult:
+    removed: int
+    failed: int
+    remaining: int | None
+
+
+@dataclass(frozen=True)
+class _Material:
+    image_id: str
+    owned: bool
+    created_at: int | None
 
 
 def _read_picture(path: Path) -> _Picture:
@@ -335,8 +361,8 @@ class QQMediaStore:
         self._cache_path = self.data_dir / "qq_media_cache.json"
         self._cache = self._load_cache()
         self._tasks: dict[str, asyncio.Task[str | None]] = {}
-        self._quota_retry: dict[str, float] = {}
-        self._reclaim_lock = asyncio.Lock()
+        self._quota_retry: dict[tuple[str, bool], float] = {}
+        self._material_locks: dict[tuple[str, bool], asyncio.Lock] = {}
         self._cache_lock = asyncio.Lock()
         self._slots = asyncio.Semaphore(2)
         self._cos_session: aiohttp.ClientSession | None = None
@@ -406,14 +432,24 @@ class QQMediaStore:
         if self._closed:
             return None
         key = hashlib.sha256(f"{platform_id}\0{picture.sha256}".encode()).hexdigest()
-        cached = self._cache.get(key)
-        if cached and cached["expires_at"] > time.time() and _valid_media_url(cached.get("url")):
-            return cached["url"]
+        account = self._material_account(api, platform_id)
         task = self._tasks.get(key)
         if task is None:
-            task = asyncio.create_task(self._upload(api, platform_id, key, picture))
-            self._tasks[key] = task
-            task.add_done_callback(lambda completed: self._finished(key, completed))
+            async with self._material_lock(account):
+                if self._closed:
+                    return None
+                cached = self._cache.get(key)
+                if (
+                    cached
+                    and cached["expires_at"] > time.time()
+                    and _valid_media_url(cached.get("url"))
+                ):
+                    return cached["url"]
+                task = self._tasks.get(key)
+                if task is None:
+                    task = asyncio.create_task(self._upload(api, account, key, picture))
+                    self._tasks[key] = task
+                    task.add_done_callback(lambda completed: self._finished(key, completed))
         return await asyncio.shield(task)
 
     def _finished(self, key: str, task: asyncio.Task[str | None]) -> None:
@@ -480,56 +516,168 @@ class QQMediaStore:
             api, f"{MATERIALS_PATH}/complete", {"upload_id": upload_id, "md5": etag}
         )
 
-    async def _reclaim_slot(self, api: Any) -> bool:
-        """Reclaim one older MyWife material from the current bot's quota."""
+    @staticmethod
+    def _material_account(api: Any, platform_id: str) -> tuple[str, bool]:
+        http = api._http
+        app_id = getattr(getattr(http, "_token", None), "app_id", None)
+        return str(app_id or platform_id), bool(getattr(http, "is_sandbox", False))
+
+    def _material_lock(self, account: tuple[str, bool]) -> asyncio.Lock:
+        return self._material_locks.setdefault(account, asyncio.Lock())
+
+    def _require_material_api(self, event: Any) -> tuple[Any, tuple[str, bool]]:
+        identity = self._api_identity(event)
+        if self._closed or identity is None:
+            raise ValueError("QQ material API is unavailable for this event")
+        api, platform_id = identity
+        return api, self._material_account(api, platform_id)
+
+    async def _materials_page(self, api: Any, cursor: str = "") -> dict[str, Any]:
+        path = f"{MATERIALS_PATH}?cursor={quote(cursor, safe='')}" if cursor else MATERIALS_PATH
+        return await self._qq_request(api, path, None, method="GET")
+
+    @staticmethod
+    def _material_total(page: dict[str, Any]) -> int:
+        total = page.get("total")
+        if type(total) is not int or total < 0:
+            raise ValueError("QQ material listing has no valid total")
+        return total
+
+    async def _list_materials(
+        self, api: Any, first: dict[str, Any] | None = None
+    ) -> tuple[list[_Material], int]:
+        materials: dict[str, _Material] = {}
         cursor = ""
         seen_cursors = set()
-        oldest: tuple[int, str] | None = None
-        cutoff = int(time.time()) - MIN_RECLAIM_AGE
+        page = first if first is not None else await self._materials_page(api)
+        total = self._material_total(page)
         for _ in range(MAX_MATERIAL_PAGES):
-            path = f"{MATERIALS_PATH}?cursor={quote(cursor, safe='')}" if cursor else MATERIALS_PATH
-            page = await self._qq_request(api, path, None, method="GET")
             items = page.get("images")
             if not isinstance(items, list):
-                return False
+                raise ValueError("QQ material listing has no image list")
             for item in items:
                 if not isinstance(item, dict):
                     continue
                 name, created = item.get("file_name"), item.get("created_at")
                 image_id = _image_id(item.get("image_id"))
-                if (
-                    isinstance(name, str)
-                    and OWN_MATERIAL.fullmatch(name)
-                    and type(created) is int
-                    and 0 < created <= cutoff
-                    and image_id not in {"", ".", ".."}
-                ):
-                    candidate = (created, image_id)
-                    if oldest is None or candidate < oldest:
-                        oldest = candidate
-            cursor = page.get("next_cursor")
-            if not isinstance(cursor, str) or not 0 < len(cursor) <= 1024 or cursor in seen_cursors:
-                break
+                if image_id not in {"", ".", ".."}:
+                    materials[image_id] = _Material(
+                        image_id,
+                        isinstance(name, str) and bool(OWN_MATERIAL.fullmatch(name)),
+                        created if type(created) is int and created > 0 else None,
+                    )
+            cursor = page.get("next_cursor", "")
+            if cursor == "":
+                return list(materials.values()), total
+            if not isinstance(cursor, str) or len(cursor) > 1024 or cursor in seen_cursors:
+                raise ValueError("QQ material listing has an invalid cursor")
             seen_cursors.add(cursor)
-        if oldest is None:
-            return False
-        image_id = oldest[1]
+            page = await self._materials_page(api, cursor)
+        raise ValueError("QQ material listing exceeds the page limit")
+
+    async def material_status(self, event: Any) -> MaterialStatus:
+        api, account = self._require_material_api(event)
+        async with self._material_lock(account), asyncio.timeout(20):
+            materials, total = await self._list_materials(api)
+        return MaterialStatus(total, sum(item.owned for item in materials))
+
+    @staticmethod
+    def _older_owned(materials: list[_Material]) -> list[_Material]:
+        cutoff = int(time.time()) - MIN_RECLAIM_AGE
+        return sorted(
+            (
+                item
+                for item in materials
+                if item.owned and item.created_at is not None and item.created_at <= cutoff
+            ),
+            key=lambda item: (item.created_at or 0, item.image_id),
+        )
+
+    async def _delete_materials(
+        self, api: Any, materials: list[_Material], *, timeout: float
+    ) -> tuple[int, int, int]:
+        removed: set[str] = set()
+        gone: set[str] = set()
+        stop = False
+
+        async def delete(item: _Material) -> None:
+            nonlocal stop
+            try:
+                path = f"{MATERIALS_PATH}/{quote(item.image_id, safe='')}/delete"
+                await self._qq_request(api, path, None, method="DELETE")
+                removed.add(item.image_id)
+            except _MediaError as exc:
+                if exc.code == IMAGE_ALREADY_GONE:
+                    gone.add(item.image_id)
+                elif exc.status in {401, 403, 429} or exc.status >= 500:
+                    stop = True
+            except _MATERIAL_ERRORS:
+                stop = True
+
         try:
-            await self._qq_request(
-                api, f"{MATERIALS_PATH}/{quote(image_id, safe='')}/delete", None, method="DELETE"
+            async with asyncio.timeout(timeout):
+                for start in range(0, len(materials), MATERIAL_DELETE_BATCH):
+                    await asyncio.gather(
+                        *(delete(item) for item in materials[start : start + MATERIAL_DELETE_BATCH])
+                    )
+                    if stop:
+                        break
+        except TimeoutError:
+            pass
+        finally:
+            invalid = removed | gone
+            if invalid:
+                async with self._cache_lock:
+                    active = {
+                        key: item
+                        for key, item in self._cache.items()
+                        if item.get("image_id") not in invalid
+                    }
+                    if len(active) != len(self._cache):
+                        await self._replace_cache(active)
+        return len(removed), len(materials) - len(invalid), len(invalid)
+
+    async def clear_materials(self, event: Any, *, all_materials: bool) -> MaterialClearResult:
+        api, account = self._require_material_api(event)
+        async with self._material_lock(account):
+            async with asyncio.timeout(20):
+                materials, total = await self._list_materials(api)
+            selected = materials if all_materials else [item for item in materials if item.owned]
+            removed, failed, invalid = await self._delete_materials(
+                api, selected, timeout=MATERIAL_CLEAR_TIMEOUT
             )
-        except _MediaError as exc:
-            if exc.code != IMAGE_ALREADY_GONE:
-                raise
-        # QQ keeps a copy for messages already sent. New cards must stop
-        # using the reclaimed reference.
-        async with self._cache_lock:
-            active = {
-                key: item for key, item in self._cache.items() if item.get("image_id") != image_id
-            }
-            if len(active) != len(self._cache):
-                await self._replace_cache(active)
-        return True
+            if invalid:
+                self._quota_retry.pop(account, None)
+            if all_materials:
+                failed += max(0, total - len(materials))
+            try:
+                async with asyncio.timeout(8):
+                    remaining = self._material_total(await self._materials_page(api))
+            except _MATERIAL_ERRORS:
+                remaining = None
+        return MaterialClearResult(removed, failed, remaining)
+
+    async def _auto_clear_quota(self, api: Any) -> None:
+        try:
+            async with asyncio.timeout(12):
+                first = await self._materials_page(api)
+                if self._material_total(first) < AUTO_CLEAR_AT:
+                    return
+                materials, _ = await self._list_materials(api, first)
+                removed, failed, _ = await self._delete_materials(
+                    api, self._older_owned(materials), timeout=10
+                )
+                if removed or failed:
+                    logger.info("MyWife QQ quota cleanup: removed=%s failed=%s", removed, failed)
+        except _MATERIAL_ERRORS as exc:
+            logger.debug("MyWife QQ quota check unavailable: %s", type(exc).__name__)
+
+    async def _reclaim_slot(self, api: Any) -> bool:
+        materials, _ = await self._list_materials(api)
+        _, _, invalid = await self._delete_materials(
+            api, self._older_owned(materials)[:1], timeout=8
+        )
+        return bool(invalid)
 
     async def _replace_cache(self, entries: dict[str, dict[str, Any]]) -> None:
         self._cache = entries
@@ -538,29 +686,27 @@ class QQMediaStore:
         except OSError:
             logger.warning("MyWife QQ media cache could not be saved")
 
-    async def _upload(self, api: Any, platform_id: str, key: str, picture: _Picture) -> str | None:
-        async with self._slots:
-            if self._closed or self._quota_retry.get(platform_id, 0) > time.monotonic():
+    async def _upload(
+        self, api: Any, account: tuple[str, bool], key: str, picture: _Picture
+    ) -> str | None:
+        async with self._slots, self._material_lock(account):
+            if self._closed or self._quota_retry.get(account, 0) > time.monotonic():
                 return None
             try:
                 async with asyncio.timeout(65):
+                    await self._auto_clear_quota(api)
                     try:
                         completed = await self._register_image(api, picture)
                     except _MediaError as exc:
                         if exc.code != IMAGE_QUOTA_EXCEEDED:
                             raise
-                        async with self._reclaim_lock:
-                            if self._quota_retry.get(platform_id, 0) > time.monotonic():
-                                return None
-                            try:
-                                if not await self._reclaim_slot(api):
-                                    raise
-                                completed = await self._register_image(api, picture)
-                            except Exception:
-                                self._quota_retry[platform_id] = (
-                                    time.monotonic() + QUOTA_RETRY_SECONDS
-                                )
+                        try:
+                            if not await self._reclaim_slot(api):
                                 raise
+                            completed = await self._register_image(api, picture)
+                        except Exception:
+                            self._quota_retry[account] = time.monotonic() + QUOTA_RETRY_SECONDS
+                            raise
                     url = completed.get("url")
                     image_id = _image_id(completed.get("image_id"))
                     now = time.time()

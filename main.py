@@ -29,6 +29,11 @@ from .webui import Dashboard
 
 PLUGIN_NAME = "astrbot_plugin_mywife"
 HISTORY_PAGE_SIZE = 10
+MATERIALS_COMMANDS = (
+    "jrlp 素材额度：查看当前 QQ Bot 的图片额度\n"
+    "jrlp 素材额度 清空本插件：清理《我老婆》上传的素材\n"
+    "jrlp 素材额度 清空全部 确认：清空当前 QQ Bot 的素材库，包含其他插件上传的素材"
+)
 
 
 def bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -174,6 +179,38 @@ class MyWifePlugin(ReplyMixin, Star):
         if state.get("marriage"):
             return f"已重置你在{self._scope_text()}的今日换老婆次数。当前婚姻仍有效，婚姻期间不能换老婆。"
         return f"已重置你在{self._scope_text()}的今日换老婆次数，今日可更换 {self.daily_limit} 次。当前角色和历史记录已保留。"
+
+    async def _qq_materials_text(self, event: AstrMessageEvent, argument: str) -> str:
+        if not event.is_admin():
+            return "QQ 图片素材管理仅限 AstrBot 管理员使用。"
+        if event.get_platform_name() not in OFFICIAL_PLATFORMS:
+            return "请在要管理的 QQ 官方 Bot 会话中发送指令。"
+        if argument == "清空全部":
+            return (
+                "此操作会清空当前 QQ Bot 的图片素材库，包含其他插件上传的素材。\n"
+                "确认后发送 jrlp 素材额度 清空全部 确认。"
+            )
+        if argument not in ("", "清空本插件", "清空全部 确认"):
+            return MATERIALS_COMMANDS
+        try:
+            if not argument:
+                status = await self.qq_images.material_status(event)
+                return (
+                    f"当前 QQ Bot 已用 {status.total}/{status.limit} 张，其中《我老婆》上传 "
+                    f"{status.owned} 张。\n{MATERIALS_COMMANDS}"
+                )
+            all_materials = argument == "清空全部 确认"
+            result = await self.qq_images.clear_materials(event, all_materials=all_materials)
+        except Exception as exc:
+            logger.warning("[我老婆] QQ 图片素材管理失败：%s", type(exc).__name__)
+            return "暂时无法完成 QQ 图片素材管理。请稍后使用 jrlp 素材额度 查看当前用量。"
+        scope = "当前 QQ Bot 整个素材库" if all_materials else "《我老婆》素材"
+        remaining = (
+            f"当前 QQ Bot 素材库还剩 {result.remaining} 张。"
+            if result.remaining is not None
+            else "暂时无法确认剩余数量。"
+        )
+        return f"{scope}清理结果：已移除 {result.removed} 张，失败 {result.failed} 张。{remaining}"
 
     def _choose(self, previous: str | None) -> dict[str, Any] | None:
         candidates = [c for c in self.catalog.get_filtered() if c.id != previous]
@@ -332,6 +369,7 @@ class MyWifePlugin(ReplyMixin, Star):
             "jrlp 图鉴 关键词：查找角色或作品；省略关键词查看统计\n"
             "jrlp 历史 [页码]：按页查看自己的抽取记录\n"
             "jrlp 重置次数 / 重置次数 / 重置换：管理员重置自己的今日更换次数\n"
+            "jrlp 素材额度：管理员查看和清理当前 QQ 官方 Bot 的图片素材\n"
             "jrlp help：查看帮助。支持 ~、.、/ 前缀。"
         )
 
@@ -433,6 +471,8 @@ class MyWifePlugin(ReplyMixin, Star):
                 text, actions = await self._history_reply(event, argument)
             elif action == "reset_count":
                 text = await self._reset_count_text(event)
+            elif action == "qq_materials":
+                text = await self._qq_materials_text(event, argument)
             elif action in ("download", "force_download"):
                 text = await self._download_text(event, action == "force_download")
             else:
@@ -447,7 +487,7 @@ class MyWifePlugin(ReplyMixin, Star):
 
     @filter.command("jrlp", alias={"今日老婆"})
     async def jrlp(self, event: AstrMessageEvent) -> None:
-        """抽取今日老婆；支持状态、结婚、离婚、下载、图鉴、历史分页、帮助。"""
+        """抽取今日老婆；支持状态、结婚、离婚、图鉴、历史和 QQ 素材管理。"""
         await self._dispatch(event)
 
     @filter.command("hlp", alias={"换老婆"})

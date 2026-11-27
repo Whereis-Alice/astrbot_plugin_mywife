@@ -36,7 +36,7 @@ def parse_command(text: str) -> tuple[str, str] | None:
         remainder
         and not remainder[0].isspace()
         and not remainder.startswith(
-            ("状态", "帮助", "结婚", "离婚", "下载", "强制下载", "图鉴", "历史", "重置")
+            ("状态", "帮助", "结婚", "离婚", "下载", "强制下载", "图鉴", "历史", "重置", "素材额度")
         )
     ):
         return None
@@ -72,6 +72,8 @@ def parse_command(text: str) -> tuple[str, str] | None:
         return aliases[sub], ""
     parts = sub.split(maxsplit=1)
     first = parts[0]
+    if first == "素材额度":
+        return "qq_materials", " ".join(parts[1].split()) if len(parts) > 1 else ""
     if first in ("历史", "history"):
         return "history", parts[1] if len(parts) > 1 else ""
     if first in ("图鉴", "catalog"):
