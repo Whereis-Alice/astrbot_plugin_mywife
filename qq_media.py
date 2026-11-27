@@ -34,6 +34,8 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_CACHE_BYTES = 1024 * 1024
 MAX_CACHE_ENTRIES = 512
+IMAGE_QUOTA_EXCEEDED = 40035007
+QUOTA_RETRY_SECONDS = 300
 # QQ's completion receipt currently reports a 90-day TTL. A missing TTL gets a
 # conservative one-hour fallback instead; neither policy extends server expiry.
 MAX_MEDIA_TTL_SECONDS = 90 * 86400
@@ -324,6 +326,7 @@ class QQMediaStore:
         self._cache_path = self.data_dir / "qq_media_cache.json"
         self._cache = self._load_cache()
         self._tasks: dict[str, asyncio.Task[str | None]] = {}
+        self._quota_retry: dict[str, float] = {}
         self._cache_lock = asyncio.Lock()
         self._slots = asyncio.Semaphore(2)
         self._cos_session: aiohttp.ClientSession | None = None
@@ -398,7 +401,7 @@ class QQMediaStore:
             return cached["url"]
         task = self._tasks.get(key)
         if task is None:
-            task = asyncio.create_task(self._upload(api, key, picture))
+            task = asyncio.create_task(self._upload(api, platform_id, key, picture))
             self._tasks[key] = task
             task.add_done_callback(lambda completed: self._finished(key, completed))
         return await asyncio.shield(task)
@@ -445,9 +448,9 @@ class QQMediaStore:
                     raise
         raise _MediaError()
 
-    async def _upload(self, api: Any, key: str, picture: _Picture) -> str | None:
+    async def _upload(self, api: Any, platform_id: str, key: str, picture: _Picture) -> str | None:
         async with self._slots:
-            if self._closed:
+            if self._closed or self._quota_retry.get(platform_id, 0) > time.monotonic():
                 return None
             try:
                 async with asyncio.timeout(65):
@@ -517,6 +520,10 @@ class QQMediaStore:
                 ImportError,
             ) as exc:
                 status, code = getattr(exc, "status", 0), getattr(exc, "code", 0)
+                if code == IMAGE_QUOTA_EXCEEDED:
+                    self._quota_retry[platform_id] = time.monotonic() + QUOTA_RETRY_SECONDS
+                    logger.warning("MyWife QQ Markdown image quota full (code=%s)", code)
+                    return None
                 logger.warning(
                     "MyWife QQ media unavailable: %s status=%s code=%s",
                     type(exc).__name__,

@@ -160,6 +160,24 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.calls[0][1]["data"], webp)
         self.assertEqual(session.calls[0][1]["headers"], {"Content-Type": "image/webp"})
 
+    async def test_quota_cooldown_skips_new_uploads_and_keeps_cached_references(self):
+        store, session = self.make_store()
+        event = FakeEvent()
+        self.assertEqual(await store.get_image_url(event, self.image), MEDIA_URL)
+        other_image = self.root / "another.png"
+        with Image.new("RGB", (16, 16), "blue") as picture:
+            picture.save(other_image)
+        store._qq_request.reset_mock(side_effect=True)
+        store._qq_request.side_effect = qq_media._MediaError(400, qq_media.IMAGE_QUOTA_EXCEEDED)
+        self.assertIsNone(await store.get_image_url(event, other_image))
+        self.assertIsNone(await store.get_image_url(event, other_image))
+        store._qq_request.assert_awaited_once()
+        self.assertEqual(await store.get_image_url(event, self.image), MEDIA_URL)
+        self.assertEqual(len(session.calls), 1)
+        # A separate QQ application still gets its own upload attempt.
+        self.assertIsNone(await store.get_image_url(FakeEvent(app_id="app-2"), other_image))
+        self.assertEqual(store._qq_request.await_count, 2)
+
     async def test_different_platform_or_account_does_not_reuse_media(self):
         store, _ = self.make_store()
         for event in (FakeEvent(), FakeEvent(platform_id="another-qq"), FakeEvent(app_id="app-2")):

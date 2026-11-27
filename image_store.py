@@ -129,10 +129,11 @@ class ImageStore:
         digest = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()
         return self.data_dir / "images" / f"{digest}{suffix}"
 
-    def public_url(self, relative_path: str) -> str:
+    def public_url(self, relative_path: str, *, source: str | None = None) -> str:
         """Return a fixed-source HTTPS image URL safe for a Markdown destination."""
         validate_relative_path(relative_path)
-        source = str(self.config.get("image_source", "github"))
+        if source is None:
+            source = str(self.config.get("image_source", "github"))
         base = IMAGE_BASE_URLS.get(source, IMAGE_BASE_URLS["github"])
         return base + quote(relative_path, safe="/")
 

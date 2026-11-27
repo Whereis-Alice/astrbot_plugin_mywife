@@ -262,11 +262,27 @@ class MyWifePlugin(ReplyMixin, Star):
                     image_url = await self.qq_images.get_image_url(event, image)
                 except Exception as exc:
                     logger.warning("[我老婆] QQ 图片处理失败：%s", type(exc).__name__)
-            if self._closing:
-                return
-            if image is None or (image_url and size):
-                body = qq_markdown(text, image_url, size)
+            source_url = None
+            if image and isinstance(path, str):
+                # The CDN carries the same source file and needs no QQ slot.
+                source = self.config.get("image_source")
                 try:
+                    source_url = self.images.public_url(
+                        path, source="jsdmirror" if source == "jsdmirror" else "jsdelivr"
+                    )
+                except ValueError:
+                    pass
+            bodies = [
+                qq_markdown(text, url, size) for url in (image_url, source_url) if url and size
+            ]
+            text_body = qq_markdown(text)
+            if source_url:
+                text_body += f"\n[查看原图]({source_url})\n"
+            bodies.append(text_body)
+            try:
+                for body in bodies:
+                    if self._closing:
+                        return
                     sent = await send_qq_markdown(event, body, buttons)
                     if sent is None:
                         # Older or custom adapters still get the SDK result.
@@ -274,13 +290,10 @@ class MyWifePlugin(ReplyMixin, Star):
                         return
                     if sent:
                         return
-                except Exception as exc:
-                    # QQ may already have accepted the message if the connection
-                    # closed before its response arrived. Avoid a duplicate post.
-                    logger.warning("[我老婆] QQ 消息送达状态未确认：%s", type(exc).__name__)
-                    return
-            else:
-                logger.warning("[我老婆] QQ Markdown 图片上传暂不可用，使用普通图文。")
+            except Exception as exc:
+                # An interrupted response may follow an accepted message.
+                logger.warning("[我老婆] QQ 消息送达状态未确认：%s", type(exc).__name__)
+                return
             if image:
                 # Plain image messages have no Markdown dimensions.
                 try:
