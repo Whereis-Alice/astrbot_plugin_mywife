@@ -335,9 +335,13 @@ async def send_qq_markdown(
     if target is None:
         return None
     api, route, payload, sender = target
-    payload["markdown"] = {"content": markdown}
-    if actions and sender:
-        payload["keyboard"] = _keyboard(actions, sender)
+    fallback = markdown
+    if actions:
+        footer = "快捷指令：" + " · ".join(f"`{command}`" for _, command in actions[:5])
+        fallback = f"{markdown.rstrip()}\n\n{footer}\n"
+        if sender:
+            payload["keyboard"] = _keyboard(actions, sender)
+    payload["markdown"] = {"content": markdown if sender else fallback}
     for attempt in range(2):
         try:
             await _request_json(api, route, payload)
@@ -349,9 +353,8 @@ async def send_qq_markdown(
             logger.warning("MyWife QQ Markdown rejected: status=%s code=%s", exc.status, exc.code)
             if attempt or "keyboard" not in payload or exc.status in {401, 404, 429}:
                 return False
-            footer = "快捷指令：" + " · ".join(f"`{command}`" for _, command in actions[:5])
             payload = {key: value for key, value in payload.items() if key != "keyboard"}
-            payload["markdown"] = {"content": f"{markdown.rstrip()}\n\n{footer}\n"}
+            payload["markdown"] = {"content": fallback}
         except aiohttp.ClientConnectorError:
             return False  # The connection was never established.
         else:

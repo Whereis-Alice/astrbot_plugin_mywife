@@ -396,6 +396,53 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("还剩 64 张", own.sent[0].chain[0].text)
         self.assertIn("暂时无法确认剩余数量", all_materials.sent[0].chain[0].text)
 
+    async def test_qq_quota_card_buttons_require_a_second_step_to_clear_everything(self):
+        self.plugin.qq_images.material_status = AsyncMock(
+            return_value=types.SimpleNamespace(total=100, owned=23, limit=100)
+        )
+        self.plugin.qq_images.clear_materials = AsyncMock(
+            return_value=types.SimpleNamespace(removed=100, failed=0, remaining=0)
+        )
+
+        async def dispatch(command):
+            event = Event(command, platform="qq_official")
+            event.is_admin = lambda: True
+            await self.plugin._dispatch(event)
+            return event
+
+        with patch.object(module, "send_qq_markdown", return_value=True) as send:
+            await dispatch("jrlp 素材额度")
+            _, summary, menu = send.await_args.args
+            self.assertIn("100/100", summary)
+            self.assertNotIn("jrlp", summary)
+            self.assertEqual([label for label, _ in menu], ["刷新", "清空本插件", "清空全部"])
+
+            await dispatch(menu[2][1])
+            _, warning, confirm = send.await_args.args
+            self.assertIn("包含其他插件", warning)
+            self.assertEqual([label for label, _ in confirm], ["返回", "确认清空"])
+            self.plugin.qq_images.clear_materials.assert_not_awaited()
+
+            event = await dispatch(confirm[1][1])
+            self.plugin.qq_images.clear_materials.assert_awaited_once_with(
+                event, all_materials=True
+            )
+            self.assertEqual(send.await_args.args[2], (("刷新", "jrlp 素材额度"),))
+
+    async def test_qq_quota_card_shows_text_commands_when_buttons_are_disabled(self):
+        self.plugin.config["qq_official_buttons"] = False
+        self.plugin.qq_images.material_status = AsyncMock(
+            return_value=types.SimpleNamespace(total=100, owned=23, limit=100)
+        )
+        event = Event("jrlp 素材额度", platform="qq_official")
+        event.is_admin = lambda: True
+        with patch.object(module, "send_qq_markdown", return_value=True) as send:
+            await self.plugin._dispatch(event)
+        _, body, actions = send.await_args.args
+        self.assertIn("jrlp 素材额度 清空本插件", body)
+        self.assertIn("jrlp 素材额度 清空全部 确认", body)
+        self.assertEqual(actions, ())
+
 
 if __name__ == "__main__":
     unittest.main()

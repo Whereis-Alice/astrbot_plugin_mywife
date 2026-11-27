@@ -29,6 +29,13 @@ from .webui import Dashboard
 
 PLUGIN_NAME = "astrbot_plugin_mywife"
 HISTORY_PAGE_SIZE = 10
+MATERIALS_REFRESH = ("刷新", "jrlp 素材额度")
+MATERIALS_ACTIONS: QuickActions = (
+    MATERIALS_REFRESH,
+    ("清空本插件", "jrlp 素材额度 清空本插件"),
+    ("清空全部", "jrlp 素材额度 清空全部"),
+)
+MATERIALS_CONFIRM = ("确认清空", "jrlp 素材额度 清空全部 确认")
 MATERIALS_COMMANDS = (
     "jrlp 素材额度：查看当前 QQ Bot 的图片额度\n"
     "jrlp 素材额度 清空本插件：清理《我老婆》上传的素材\n"
@@ -180,37 +187,46 @@ class MyWifePlugin(ReplyMixin, Star):
             return f"已重置你在{self._scope_text()}的今日换老婆次数。当前婚姻仍有效，婚姻期间不能换老婆。"
         return f"已重置你在{self._scope_text()}的今日换老婆次数，今日可更换 {self.daily_limit} 次。当前角色和历史记录已保留。"
 
-    async def _qq_materials_text(self, event: AstrMessageEvent, argument: str) -> str:
+    async def _qq_materials_reply(
+        self, event: AstrMessageEvent, argument: str
+    ) -> tuple[str, QuickActions]:
         if not event.is_admin():
-            return "QQ 图片素材管理仅限 AstrBot 管理员使用。"
+            return "QQ 图片素材管理仅限 AstrBot 管理员使用。", ()
         if event.get_platform_name() not in OFFICIAL_PLATFORMS:
-            return "请在要管理的 QQ 官方 Bot 会话中发送指令。"
+            return "请在要管理的 QQ 官方 Bot 会话中发送指令。", ()
+        buttons = self._qq_buttons_enabled(event)
         if argument == "清空全部":
-            return (
-                "此操作会清空当前 QQ Bot 的图片素材库，包含其他插件上传的素材。\n"
-                "确认后发送 jrlp 素材额度 清空全部 确认。"
-            )
+            warning = "此操作会清空当前 QQ Bot 的图片素材库，包含其他插件上传的素材。"
+            if buttons:
+                return warning, (("返回", MATERIALS_REFRESH[1]), MATERIALS_CONFIRM)
+            return f"{warning}\n确认后发送 {MATERIALS_CONFIRM[1]}。", ()
         if argument not in ("", "清空本插件", "清空全部 确认"):
-            return MATERIALS_COMMANDS
+            return MATERIALS_COMMANDS, ()
         try:
             if not argument:
                 status = await self.qq_images.material_status(event)
-                return (
+                summary = (
                     f"当前 QQ Bot 已用 {status.total}/{status.limit} 张，其中《我老婆》上传 "
-                    f"{status.owned} 张。\n{MATERIALS_COMMANDS}"
+                    f"{status.owned} 张。"
                 )
+                if buttons:
+                    return summary, MATERIALS_ACTIONS
+                return f"{summary}\n{MATERIALS_COMMANDS}", ()
             all_materials = argument == "清空全部 确认"
             result = await self.qq_images.clear_materials(event, all_materials=all_materials)
         except Exception as exc:
             logger.warning("[我老婆] QQ 图片素材管理失败：%s", type(exc).__name__)
-            return "暂时无法完成 QQ 图片素材管理。请稍后使用 jrlp 素材额度 查看当前用量。"
+            if buttons:
+                return "暂时无法完成 QQ 图片素材管理。", (MATERIALS_REFRESH,)
+            return "暂时无法完成 QQ 图片素材管理。请稍后使用 jrlp 素材额度 查看当前用量。", ()
         scope = "当前 QQ Bot 整个素材库" if all_materials else "《我老婆》素材"
         remaining = (
             f"当前 QQ Bot 素材库还剩 {result.remaining} 张。"
             if result.remaining is not None
             else "暂时无法确认剩余数量。"
         )
-        return f"{scope}清理结果：已移除 {result.removed} 张，失败 {result.failed} 张。{remaining}"
+        text = f"{scope}清理结果：已移除 {result.removed} 张，失败 {result.failed} 张。{remaining}"
+        return text, (MATERIALS_REFRESH,) if buttons else ()
 
     def _choose(self, previous: str | None) -> dict[str, Any] | None:
         candidates = [c for c in self.catalog.get_filtered() if c.id != previous]
@@ -286,7 +302,7 @@ class MyWifePlugin(ReplyMixin, Star):
                 except Exception as exc:
                     logger.warning("[我老婆] 图片获取失败：%s", type(exc).__name__)
         markdown = self._markdown_enabled(event)
-        buttons = actions if markdown and self.config.get("qq_official_buttons", True) else ()
+        buttons = actions if self._qq_buttons_enabled(event) else ()
         if self._closing:
             return
         if markdown:
@@ -322,6 +338,9 @@ class MyWifePlugin(ReplyMixin, Star):
                     sent = await send_qq_markdown(event, body, buttons)
                     if sent is None:
                         # Older or custom adapters still get the SDK result.
+                        if buttons:
+                            commands = " · ".join(f"`{command}`" for _, command in buttons)
+                            body = f"{body.rstrip()}\n\n快捷指令：{commands}\n"
                         await event.send(self._result(event, body, markdown=True))
                         return
                     if sent:
@@ -355,6 +374,9 @@ class MyWifePlugin(ReplyMixin, Star):
         return event.get_platform_name() in OFFICIAL_PLATFORMS and bool(
             self.config.get("qq_official_markdown", True)
         )
+
+    def _qq_buttons_enabled(self, event: AstrMessageEvent) -> bool:
+        return self._markdown_enabled(event) and bool(self.config.get("qq_official_buttons", True))
 
     def _help(self) -> str:
         return (
@@ -472,7 +494,7 @@ class MyWifePlugin(ReplyMixin, Star):
             elif action == "reset_count":
                 text = await self._reset_count_text(event)
             elif action == "qq_materials":
-                text = await self._qq_materials_text(event, argument)
+                text, actions = await self._qq_materials_reply(event, argument)
             elif action in ("download", "force_download"):
                 text = await self._download_text(event, action == "force_download")
             else:
