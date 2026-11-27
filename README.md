@@ -84,7 +84,7 @@ LLM 模式不会在模型回复后拼接一段固定的角色介绍。模型请�
 
 Bot 从所选 monbed 来源下载、验证原图，再用当前 QQ 官方平台身份上传到 QQ 图片存储。消息内嵌入 QQ 专用图片引用，不需要额外配置图床或 COS 密钥。原文件、上传结果和降级用预览都会缓存。
 
-`image_source` 可选择 `github`、`jsdelivr` 或 `jsdmirror`。QQ 图片素材额度用满或上传失败时，卡片会尝试引用 monbed 图库的原图 CDN 地址，保留 Markdown 和快捷按钮。QQ 若拒绝图片，插件会尝试发送带「查看原图」链接的 Markdown。QQ 拒绝按钮时会附上手动指令。Markdown 无法发送时，普通图文使用等比缩图。
+`image_source` 可选择 `github`、`jsdelivr` 或 `jsdmirror`。QQ 图片素材额度用满时，插件回收一张本插件上传的旧 QQ 素材，再重试上传原图。QQ 已发送的消息使用自己的图片副本。如果素材仍不可用，卡片保留快捷按钮并提供「查看原图」链接。QQ 拒绝按钮时会附上手动指令。Markdown 无法发送时，普通图文使用等比缩图。
 
 支持 AstrBot 的 QQ 官方 WebSocket 和 Webhook 适配器。按钮与 Markdown 的可用性取决于 QQ 开放平台授予该 Bot 的能力和聊天场景；普通消息仍可输入同样的指令。
 

@@ -168,15 +168,71 @@ class QQMediaTests(unittest.IsolatedAsyncioTestCase):
         with Image.new("RGB", (16, 16), "blue") as picture:
             picture.save(other_image)
         store._qq_request.reset_mock(side_effect=True)
-        store._qq_request.side_effect = qq_media._MediaError(400, qq_media.IMAGE_QUOTA_EXCEEDED)
+        quota = qq_media._MediaError(400, qq_media.IMAGE_QUOTA_EXCEEDED)
+        foreign = {"images": [{"file_name": "other-plugin.png", "image_id": "foreign"}]}
+        store._qq_request.side_effect = [quota, foreign, quota, foreign]
         self.assertIsNone(await store.get_image_url(event, other_image))
         self.assertIsNone(await store.get_image_url(event, other_image))
-        store._qq_request.assert_awaited_once()
+        self.assertEqual(store._qq_request.await_count, 2)
+        self.assertEqual(store._qq_request.await_args.kwargs, {"method": "GET"})
         self.assertEqual(await store.get_image_url(event, self.image), MEDIA_URL)
         self.assertEqual(len(session.calls), 1)
         # A separate QQ application still gets its own upload attempt.
         self.assertIsNone(await store.get_image_url(FakeEvent(app_id="app-2"), other_image))
-        self.assertEqual(store._qq_request.await_count, 2)
+        self.assertEqual(store._qq_request.await_count, 4)
+        self.assertFalse(
+            any(call.kwargs.get("method") == "DELETE" for call in store._qq_request.await_args_list)
+        )
+
+    async def test_quota_reclaims_oldest_owned_material_then_uploads_original(self):
+        store, session = self.make_store()
+        event = FakeEvent()
+        self.assertEqual(await store.get_image_url(event, self.image), MEDIA_URL)
+        recent = int(time.time()) - 10
+        old = recent - qq_media.MIN_RECLAIM_AGE - 100
+        owned_name = "mywife-" + "a" * 32 + ".png"
+        store._qq_request.reset_mock(side_effect=True)
+        store._qq_request.side_effect = [
+            qq_media._MediaError(400, qq_media.IMAGE_QUOTA_EXCEEDED),
+            {
+                "images": [
+                    {"file_name": owned_name, "image_id": "recent", "created_at": recent},
+                    {"file_name": owned_name, "image_id": "own-2", "created_at": old + 1},
+                ],
+                "next_cursor": "page+=/",
+            },
+            {
+                "images": [
+                    {"file_name": owned_name, "image_id": "own.image:1", "created_at": old},
+                    {
+                        "file_name": "anime-draw-card.png",
+                        "image_id": "foreign",
+                        "created_at": old - 1,
+                    },
+                ],
+                "next_cursor": "",
+            },
+            {},
+            {"presigned_url": COS_URL, "upload_id": "upload-2"},
+            {"url": MEDIA_URL + "-new", "image_id": "own.new"},
+        ]
+        other_image = self.root / "another.png"
+        with Image.new("RGB", (32, 16), "blue") as picture:
+            picture.save(other_image)
+        original = other_image.read_bytes()
+        checksum = hashlib.md5(original, usedforsecurity=False).hexdigest()
+        session.response = FakeResponse(checksum)
+
+        self.assertEqual(await store.get_image_url(event, other_image), MEDIA_URL + "-new")
+        calls = store._qq_request.await_args_list
+        self.assertEqual(calls[2].args[1], "/v2/media-images?cursor=page%2B%3D%2F")
+        self.assertEqual(calls[3].args[1], "/v2/media-images/own.image%3A1/delete")
+        self.assertEqual(calls[3].kwargs, {"method": "DELETE"})
+        self.assertEqual(calls[4].args, calls[0].args)
+        self.assertEqual(session.calls[-1][1]["data"], original)
+        reloaded = qq_media.QQMediaStore(self.data_dir)
+        self.addAsyncCleanup(reloaded.close)
+        self.assertEqual([item["image_id"] for item in reloaded._cache.values()], ["own.new"])
 
     async def test_different_platform_or_account_does_not_reuse_media(self):
         store, _ = self.make_store()

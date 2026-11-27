@@ -200,7 +200,7 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.read_bytes(), original_bytes)
         self.assertFalse((self.data / "qq_previews").exists())
 
-    async def test_failed_native_upload_keeps_markdown_and_buttons_using_catalog_image(self):
+    async def test_failed_native_upload_keeps_markdown_buttons_and_original_link(self):
         event = Event(platform="qq_official")
         original = self.make_portrait()
         actions = (("换老婆", "hlp"),)
@@ -210,22 +210,28 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.qq_images.get_image_url.assert_awaited_once_with(event, original)
         send.assert_awaited_once()
         _, body, buttons = send.await_args.args
-        self.assertIn("![角色图片 #100px #200px]", body)
-        self.assertIn("https://fastly.jsdelivr.net/gh/monbed/wife@main/img1/A%21B.jpg", body)
+        self.assertNotIn("![", body)
+        self.assertIn(
+            "[查看原图](https://fastly.jsdelivr.net/gh/monbed/wife@main/img1/A%21B.jpg)", body
+        )
         self.assertEqual(buttons, actions)
         self.assertEqual(event.sent, [])
         self.assertFalse((self.data / "qq_previews").exists())
 
-    async def test_rejected_external_image_can_keep_text_markdown_and_original_link(self):
+    async def test_rejected_native_image_can_keep_markdown_buttons_and_original_link(self):
         event = Event(platform="qq_official")
         self.make_portrait()
-        self.plugin.qq_images.get_image_url = AsyncMock(return_value=None)
+        self.plugin.qq_images.get_image_url = AsyncMock(
+            return_value="qqbot-media://image/v1/mywife-native-image"
+        )
+        actions = (("换老婆", "hlp"),)
         with patch.object(module, "send_qq_markdown", side_effect=[False, True]) as send:
-            await self.plugin._send(event, "角色结果", {"image_path": "img1/A!B.jpg"})
+            await self.plugin._send(event, "角色结果", {"image_path": "img1/A!B.jpg"}, actions)
         full, text_only = (call.args[1] for call in send.await_args_list)
-        self.assertIn("![角色图片", full)
+        self.assertIn("![角色图片 #100px #200px](qqbot-media://", full)
         self.assertNotIn("![", text_only)
         self.assertIn("[查看原图](https://fastly.jsdelivr.net/", text_only)
+        self.assertEqual(send.await_args.args[2], actions)
         self.assertEqual(event.sent, [])
 
     async def test_failed_markdown_falls_back_to_one_normal_text_image_chain(self):
@@ -297,10 +303,9 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
             await self.plugin._send(
                 event, "Alice", {"image_path": "img1/A!B.jpg"}, (("历史", "jrlp 历史"),)
             )
-        self.assertEqual(send.await_count, 3)
-        native, external, text_only = (call.args[1] for call in send.await_args_list)
+        self.assertEqual(send.await_count, 2)
+        native, text_only = (call.args[1] for call in send.await_args_list)
         self.assertIn("qqbot-media://", native)
-        self.assertIn("![角色图片", external)
         self.assertNotIn("![", text_only)
         result = event.sent[0]
         self.assertFalse(result.use_markdown_)

@@ -263,8 +263,9 @@ class MyWifePlugin(ReplyMixin, Star):
                 except Exception as exc:
                     logger.warning("[我老婆] QQ 图片处理失败：%s", type(exc).__name__)
             source_url = None
-            if image and isinstance(path, str):
-                # The CDN carries the same source file and needs no QQ slot.
+            if isinstance(path, str):
+                # QQ can accept external inline images that its clients cannot
+                # load. Offer the original as a link instead.
                 source = self.config.get("image_source")
                 try:
                     source_url = self.images.public_url(
@@ -272,9 +273,7 @@ class MyWifePlugin(ReplyMixin, Star):
                     )
                 except ValueError:
                     pass
-            bodies = [
-                qq_markdown(text, url, size) for url in (image_url, source_url) if url and size
-            ]
+            bodies = [qq_markdown(text, image_url, size)] if image_url and size else []
             text_body = qq_markdown(text)
             if source_url:
                 text_body += f"\n[查看原图]({source_url})\n"
