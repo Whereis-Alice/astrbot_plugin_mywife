@@ -60,6 +60,9 @@ class Event:
     def get_group_id(self):
         return self.group
 
+    def is_private_chat(self):
+        return not self.group
+
     def get_sender_id(self):
         return self.user
 
@@ -136,6 +139,47 @@ class MainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.plugin._state_key(Event()), self.plugin._state_key(Event(group="group-b"))
         )
+
+    async def test_cross_group_history_uses_event_group_and_resolves_names(self):
+        self.plugin.config["state_scope"] = "user"
+        first = Event(group="group-a")
+        first.message_obj = types.SimpleNamespace(
+            group=types.SimpleNamespace(group_name="苍彼同好会")
+        )
+        first.get_group = AsyncMock()
+        second = Event(group="group-b")
+        second.get_group = AsyncMock(return_value=types.SimpleNamespace(group_name="飞行社"))
+        private = Event(group="")
+        private.get_group = AsyncMock()
+
+        await self.plugin._business(first, "draw")
+        await self.plugin._business(second, "redraw")
+        await self.plugin._business(second, "redraw")
+        await self.plugin._business(private, "redraw")
+
+        first.get_group.assert_not_awaited()
+        second.get_group.assert_awaited_once_with("group-b")
+        private.get_group.assert_not_awaited()
+        records = (await self.plugin.store.history())["items"]
+        self.assertEqual(
+            [(r["group_id"], r["group_name"], r["conversation_type"]) for r in records],
+            [
+                ("", "", "private"),
+                ("group-b", "飞行社", "group"),
+                ("group-b", "飞行社", "group"),
+                ("group-a", "苍彼同好会", "group"),
+            ],
+        )
+        self.assertEqual(len({r["key"] for r in records}), 1)
+
+    async def test_group_lookup_failure_keeps_group_identity(self):
+        event = Event(group="restricted")
+        event.get_group = AsyncMock(side_effect=RuntimeError("permission denied"))
+        await self.plugin._business(event, "draw")
+        record = (await self.plugin.store.history())["items"][0]
+        self.assertEqual(record["group_id"], "restricted")
+        self.assertEqual(record["group_name"], "")
+        self.assertEqual(record["conversation_type"], "group")
 
     async def test_official_adapter_pseudo_mention_is_the_current_bot(self):
         event = Event(platform="qq_official", bot="unknown_selfid")

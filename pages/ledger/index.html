@@ -13,7 +13,7 @@
         <div>
           <p class="eyebrow">我老婆 <span>•</span> 管理台</p>
           <h1>抽取账本</h1>
-          <p class="intro">查看玩家抽到的角色、当前婚姻和历史流水。</p>
+          <p class="intro">按群查看抽取、婚姻和玩家记录。</p>
         </div>
         <div class="masthead-actions">
           <span id="today" class="stamp" aria-label="插件日期">—</span>
@@ -28,54 +28,96 @@
         <div><dt>玩家记录</dt><dd id="stat-players">—</dd></div>
       </dl>
 
-      <section class="panel" aria-label="数据管理">
-        <div class="panel-heading">
-          <nav aria-label="账本视图">
-            <button type="button" class="tab" id="history-tab" aria-pressed="true">抽取与关系流水</button>
-            <button type="button" class="tab" id="players-tab" aria-pressed="false">玩家与婚姻</button>
-          </nav>
-          <span class="panel-note" id="limit"></span>
-        </div>
-
-        <form id="filters" class="filters">
-          <label class="query">搜索
-            <input type="search" name="q" id="query" maxlength="100" placeholder="玩家、角色或出处">
-          </label>
-          <label id="action-filter">流水类型
-            <select name="action" id="action">
-              <option value="">全部类型</option>
-              <option value="draws">抽取和更换</option>
-              <option value="draw">首次抽取</option>
-              <option value="redraw">更换角色</option>
-              <option value="marry">结婚</option>
-              <option value="divorce">离婚</option>
-            </select>
-          </label>
-          <button type="submit" class="primary">查询</button>
-          <button type="button" class="secondary" id="clear-filters">清除筛选</button>
-        </form>
-        <div id="focused-player" class="focused-player" hidden></div>
-        <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
-
-        <div class="table-scroll" id="records" aria-busy="true">
-          <table>
-            <caption class="sr-only" id="record-caption">抽取与关系流水</caption>
-            <thead id="record-head"></thead>
-            <tbody id="record-body"></tbody>
-          </table>
-          <p id="empty" class="empty">正在连接 AstrBot 管理面板…</p>
-        </div>
-        <footer class="pager">
-          <span id="page-label" aria-live="polite">—</span>
-          <div>
-            <button type="button" class="secondary" id="previous" disabled>上一页</button>
-            <button type="button" class="secondary" id="next" disabled>下一页</button>
+      <div class="ledger-layout">
+        <aside class="panel group-panel" aria-labelledby="group-list-heading">
+          <h2 id="group-list-heading">群聊与会话</h2>
+          <button type="button" class="group-option all-groups" id="all-groups" aria-pressed="true">全部记录</button>
+          <form id="group-filters" class="group-filters" role="search" aria-label="查找群聊">
+            <input type="search" id="group-query" aria-label="群名或群号" maxlength="100" placeholder="群名或群号">
+            <button type="submit" class="secondary">查找</button>
+          </form>
+          <nav class="group-list" id="group-list" aria-label="按群查看记录" aria-busy="true"></nav>
+          <p class="group-status" id="group-status" role="status">正在读取会话…</p>
+          <div class="group-pager" id="group-pager" hidden>
+            <span id="group-page-label"></span>
+            <div>
+              <button type="button" class="secondary" id="group-previous" aria-label="上一页会话">‹</button>
+              <button type="button" class="secondary" id="group-next" aria-label="下一页会话">›</button>
+            </div>
           </div>
-        </footer>
-      </section>
+        </aside>
 
-      <p class="footnote">从旧版迁移的记录可能没有玩家身份或具体时间。仅 AstrBot 管理面板授权用户可查看此页。</p>
+        <section class="panel records-panel" aria-labelledby="active-group">
+          <header class="active-group">
+            <div>
+              <h2 id="active-group" tabindex="-1">全部记录</h2>
+              <p id="active-group-detail" class="detail" hidden></p>
+            </div>
+            <button type="button" class="secondary" id="edit-group" hidden>设置群名</button>
+          </header>
+          <div class="panel-heading">
+            <nav aria-label="账本视图">
+              <button type="button" class="tab" id="history-tab" aria-pressed="true">抽取与关系流水</button>
+              <button type="button" class="tab" id="players-tab" aria-pressed="false">玩家与婚姻</button>
+            </nav>
+            <span class="panel-note" id="limit"></span>
+          </div>
+
+          <form id="filters" class="filters">
+            <label class="query">搜索
+              <input type="search" name="q" id="query" maxlength="100" placeholder="玩家、角色或出处">
+            </label>
+            <label id="action-filter">流水类型
+              <select name="action" id="action">
+                <option value="">全部类型</option>
+                <option value="draws">抽取和更换</option>
+                <option value="draw">首次抽取</option>
+                <option value="redraw">更换角色</option>
+                <option value="marry">结婚</option>
+                <option value="divorce">离婚</option>
+              </select>
+            </label>
+            <button type="submit" class="primary">查询</button>
+            <button type="button" class="secondary" id="clear-filters">清除筛选</button>
+          </form>
+          <div id="focused-player" class="focused-player" hidden></div>
+          <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+
+          <div class="table-scroll" id="records" aria-busy="true">
+            <table>
+              <caption class="sr-only" id="record-caption">抽取与关系流水</caption>
+              <thead id="record-head"></thead>
+              <tbody id="record-body"></tbody>
+            </table>
+            <p id="empty" class="empty">正在连接 AstrBot 管理面板…</p>
+          </div>
+          <footer class="pager">
+            <span id="page-label" aria-live="polite">—</span>
+            <div>
+              <button type="button" class="secondary" id="previous" disabled>上一页</button>
+              <button type="button" class="secondary" id="next" disabled>下一页</button>
+            </div>
+          </footer>
+        </section>
+      </div>
+
+      <p class="footnote">旧版记录缺少会话信息时，会出现在「未归类记录」中。</p>
     </main>
+
+    <dialog id="group-dialog" aria-labelledby="group-dialog-title">
+      <form method="dialog">
+        <h2 id="group-dialog-title">设置群名</h2>
+        <p id="group-dialog-details"></p>
+        <label class="alias-label">群名
+          <input type="text" id="group-alias" maxlength="100" autofocus>
+        </label>
+        <p>留空使用平台提供的群名或群号。</p>
+        <div class="dialog-buttons">
+          <button type="button" id="cancel-group" class="secondary">取消</button>
+          <button value="save" class="primary">保存群名</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="reset-dialog" aria-labelledby="reset-title">
       <form method="dialog">

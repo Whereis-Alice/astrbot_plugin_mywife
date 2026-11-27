@@ -104,7 +104,9 @@ Bot 从所选 monbed 来源下载、验证原图，再用当前 QQ 官方平台�
 
 ## 抽取账本
 
-在已登录的 AstrBot 管理面板，从侧栏「扩展功能」打开「抽取账本」。可以查看今日抽取量、存档总量、有效婚姻、每位玩家的当前状态，以及抽取、换人、结婚或离婚流水。支持搜索、筛选、分页，也可以从玩家列表直接进入该玩家的流水。
+在已登录的 AstrBot 管理面板，从侧栏「扩展功能」打开「抽取账本」。可以查看今日抽取量、存档总量、有效婚姻、每位玩家的当前状态，以及抽取、换人、结婚或离婚流水。可以按群筛选流水和玩家，也可以从玩家列表直接打开该玩家在所选群的流水。
+
+账本显示平台提供的群名，也可以在选中群后手动设置展示名称。QQ 官方接口未提供群名时，账本显示群 ID。能从原记录确定群归属的流水会自动分组，其余旧记录可从「未归类记录」中查看。
 
 管理页可为指定玩家重置今日更换次数。重置只影响选定的存档范围，保留当前角色、有效婚姻和所有流水。页面使用 AstrBot 后台登录，无需另开端口或设置密码。
 
@@ -156,7 +158,7 @@ data/plugin_data/astrbot_plugin_mywife/
 
 ## 开发、来源与许可
 
-玩法参考 [Set-suei/galgame-LLM-jrlp](https://github.com/Set-suei/galgame-LLM-jrlp)，管理页参考 [Heximiao/astrbot-plugin-wifepicker](https://github.com/Heximiao/astrbot-plugin-wifepicker)；本项目代码独立实现。角色元数据与图片来源感谢 [monbed/wife](https://github.com/monbed/wife)。仓库包含轻量清单，不包含原 galgame 图库或整个 monbed 图片包。
+玩法参考 [Set-suei/galgame-LLM-jrlp](https://github.com/Set-suei/galgame-LLM-jrlp)，管理页参考 [Heximiao/astrbot-plugin-wifepicker](https://github.com/Heximiao/astrbot-plugin-wifepicker)。角色元数据、抽取图片和鸢泽美咲插件头像的原图来自 [monbed/wife](https://github.com/monbed/wife)。仓库随附角色清单和头像，抽取图片按需下载。
 
 插件代码采用 [MIT License](LICENSE)。monbed 清单保留其[原版权文本](data/LICENSE.monbed-wife)和[来源说明](data/NOTICE.md)。图片作品的版权归相应权利人；图库没有逐张作者、授权或内容分级字段，公开使用可通过作品筛选和角色排除整理适合自己机器人的角色池。
 

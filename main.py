@@ -7,6 +7,7 @@ import hashlib
 import json
 import random
 import time
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,7 @@ class MyWifePlugin(ReplyMixin, Star):
         self.images = ImageStore(self.data_dir, config)
         self.qq_images = QQMediaStore(self.data_dir)
         self._qq_preview_slots = asyncio.Semaphore(2)
+        self._group_names: OrderedDict[tuple[str, str, str], tuple[float, str]] = OrderedDict()
         self.store = WifeStore(self.data_dir / "records.sqlite3", self._legacy_records)
         self._dashboard: Dashboard | None = None
         self._refresh_task: asyncio.Task | None = None
@@ -153,22 +155,60 @@ class MyWifePlugin(ReplyMixin, Star):
         scope = self.config.get("state_scope", "session")
         return scope if scope in ("group", "user") else "session"
 
-    def _identity(self, event: AstrMessageEvent) -> dict[str, str]:
+    async def _identity(self, event: AstrMessageEvent) -> dict[str, str]:
         scope = self._scope()
+        platform = event.get_platform_name()
+        platform_id = event.get_platform_id()
+        group_id = str(event.get_group_id() or "")
         if scope == "session":
             session = str(event.unified_msg_origin)
         elif scope == "group":
-            session = str(event.get_group_id() or "private")
+            session = group_id or "private"
         else:
             session = ""
+        conversation_type = "unknown"
+        group_name = ""
+        if group_id:
+            conversation_type = "group"
+            group_name = await self._group_name(event, (platform, platform_id, group_id))
+        elif event.is_private_chat():
+            conversation_type = "private"
         return {
-            "platform": event.get_platform_name(),
-            "platform_id": event.get_platform_id(),
+            "platform": platform,
+            "platform_id": platform_id,
             "scope": scope,
             "session_id": session,
             "user_id": event.get_sender_id(),
             "display_name": event.get_sender_name() or "",
+            "conversation_type": conversation_type,
+            "group_id": group_id,
+            "group_name": group_name,
         }
+
+    async def _group_name(self, event: AstrMessageEvent, key: tuple[str, str, str]) -> str:
+        group = getattr(getattr(event, "message_obj", None), "group", None)
+        name = str(getattr(group, "group_name", None) or "").strip()
+        now = time.monotonic()
+        cached = self._group_names.get(key)
+        if not name and cached and cached[0] > now:
+            self._group_names.move_to_end(key)
+            return cached[1]
+
+        lookup = getattr(event, "get_group", None)
+        if not name and callable(lookup):
+            # Concurrent commands can keep using the ID while the lookup runs.
+            self._group_names[key] = (now + 300, "")
+            try:
+                group = await asyncio.wait_for(lookup(key[2]), timeout=2)
+            except Exception:
+                # Some adapters fill in the current group before querying its members.
+                pass
+            name = str(getattr(group, "group_name", None) or "").strip()
+        self._group_names[key] = (now + (3600 if name else 300), name)
+        self._group_names.move_to_end(key)
+        if len(self._group_names) > 1024:
+            self._group_names.popitem(last=False)
+        return name
 
     def _scope_text(self) -> str:
         return {"group": "当前群聊或私聊", "user": "当前 Bot 的跨群共享范围"}.get(
@@ -181,7 +221,7 @@ class MyWifePlugin(ReplyMixin, Star):
             return "重置次数仅限 AstrBot 管理员使用。"
         day, now = self._local_now()
         state = await self.store.reset_count(
-            self._state_key(event), self._identity(event), day, now
+            self._state_key(event), await self._identity(event), day, now
         )
         if state.get("marriage"):
             return f"已重置你在{self._scope_text()}的今日换老婆次数。当前婚姻仍有效，婚姻期间不能换老婆。"
@@ -244,7 +284,7 @@ class MyWifePlugin(ReplyMixin, Star):
         limit = self.daily_limit
         scenario, character, values = await self.store.change(
             self._state_key(event),
-            self._identity(event),
+            await self._identity(event),
             day,
             now,
             action,

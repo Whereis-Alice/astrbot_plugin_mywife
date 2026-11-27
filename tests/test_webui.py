@@ -117,6 +117,78 @@ def test_reset_is_post_only_and_preserves_role_marriage_and_history(dashboard):
     assert client.get(f"{PATH}/history", headers=headers).json()["total"] == 4
 
 
+def test_dashboard_groups_filter_shared_player_history_by_event_location(dashboard):
+    page, client, headers = dashboard
+    shared = "user:" + "d" * 64
+    identity = {"scope": "user", "platform": "qq_official", "platform_id": "leaf"}
+
+    async def seed():
+        for day, conversation, name in (
+            ("2026-11-24", {"group_id": "101", "group_name": "雏鸟文艺部"}, "鸢泽美咲"),
+            ("2026-11-25", {"group_id": "202", "group_name": "飞行社"}, "总羽爱乃"),
+            (DAY, {"conversation_type": "private"}, "艾拉"),
+        ):
+            await page.plugin.store.change(
+                shared,
+                {**identity, **conversation},
+                day,
+                NOW,
+                "draw",
+                5,
+                7,
+                lambda _: {"id": name, "name": name},
+            )
+
+    asyncio.run(seed())
+    groups = f"{PATH}/groups"
+    assert client.get(groups).status_code == 401
+    response = client.get(groups, params={"q": "飞行"}, headers=headers)
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["items"][0]["group_id"] == "202"
+    all_groups = client.get(groups, headers=headers).json()
+    assert all_groups["total"] == 4
+    rows = {row["group_name"] or row["conversation_type"]: row for row in all_groups["items"]}
+    literary = rows["雏鸟文艺部"]
+    assert literary["player_count"] == literary["history_count"] == 1
+    assert rows["unknown"]["history_count"] == 4
+    assert rows["private"]["history_count"] == 1
+
+    params = {"player_key": shared, "group_key": literary["group_key"]}
+    history = client.get(f"{PATH}/history", params=params, headers=headers).json()
+    assert history["total"] == 1
+    assert [item["character"]["name"] for item in history["items"]] == ["鸢泽美咲"]
+    assert history["items"][0]["group_name"] == "雏鸟文艺部"
+    del params["player_key"]
+    players = client.get(f"{PATH}/players", params=params, headers=headers).json()
+    assert [item["key"] for item in players["items"]] == [shared]
+    assert client.get(f"{PATH}/history?group_key=bad", headers=headers).status_code == 400
+    assert client.get(f"{PATH}/players?group_key=bad", headers=headers).status_code == 400
+
+    alias = f"{PATH}/group-alias"
+    rename = {"group_key": literary["group_key"], "alias": "  四重奏  "}
+    assert client.post(alias, json=rename).status_code == 401
+    assert (
+        client.post(alias, json={**rename, "alias": "a" * 101}, headers=headers).status_code == 400
+    )
+    assert (
+        client.post(alias, json={**rename, "group_key": "private"}, headers=headers).status_code
+        == 404
+    )
+    changed = client.post(alias, json=rename, headers=headers)
+    assert changed.json()["group_name"] == "四重奏"
+    assert changed.json()["reported_group_name"] == "雏鸟文艺部"
+    assert client.get(groups, params={"q": "四重"}, headers=headers).json()["total"] == 1
+    for view in ("history", "players"):
+        item = client.get(f"{PATH}/{view}", params=params, headers=headers).json()["items"][0]
+        assert (item["group_name"], item["group_alias"], item["reported_group_name"]) == (
+            "四重奏",
+            "四重奏",
+            "雏鸟文艺部",
+        )
+    restored = client.post(alias, json={**rename, "alias": ""}, headers=headers)
+    assert restored.json()["group_name"] == "雏鸟文艺部"
+
+
 def test_close_does_not_unregister_handlers_from_new_plugin_instance(dashboard):
     old, client, headers = dashboard
     newer = Dashboard(old.plugin, PLUGIN)

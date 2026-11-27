@@ -1,6 +1,6 @@
 # 角色名单来源
 
-`catalog.txt` 仅收录 [monbed/wife](https://github.com/monbed/wife) 中 `img1/`、`img2/` 的图片相对路径，没有打包图片，也没有使用 `astrbot_plugin_animewifex` 的代码。
+`catalog.txt` 收录 [monbed/wife](https://github.com/monbed/wife) 中 `img1/`、`img2/` 的图片相对路径。仓库根目录的 `logo.png` 裁自 [《苍之彼方的四重奏》鸢泽美咲](https://github.com/monbed/wife/blob/main/img1/%E8%8B%8D%E4%B9%8B%E5%BD%BC%E6%96%B9%E7%9A%84%E5%9B%9B%E9%87%8D%E5%A5%8F%21%E9%B8%A2%E6%B3%BD%E7%BE%8E%E5%92%B2.png)。
 
 - 快照日期：2026-11-25。
 - GitHub 树：`7f62f5db93b2449c758205287d2ee1d680f33f54`。

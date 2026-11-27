@@ -11,6 +11,7 @@ from typing import Any
 from astrbot.api import logger
 
 PLAYER_KEY = re.compile(r"user:(?:session:)?[a-f0-9]{64}")
+GROUP_KEY = re.compile(r"[a-f0-9]{64}|private|unknown")
 HISTORY_ACTIONS = {"", "draws", "draw", "redraw", "marry", "divorce"}
 PRIVATE_HEADERS = {"Cache-Control": "no-store"}
 
@@ -42,6 +43,8 @@ class Dashboard:
     def register(self) -> None:
         for path, handler, method, description in (
             ("overview", self.overview, "GET", "概览"),
+            ("groups", self.groups, "GET", "群聊与会话分组"),
+            ("group-alias", self.group_alias, "POST", "设置群聊显示名称"),
             ("players", self.players, "GET", "玩家和婚姻"),
             ("history", self.history, "GET", "抽取与关系流水"),
             ("reset-count", self.reset_count, "POST", "重置玩家今日换老婆次数"),
@@ -96,6 +99,12 @@ class Dashboard:
             raise RequestError("搜索词最多输入 100 个字符。")
         return page, size, query
 
+    def _group_key(self) -> str:
+        key = self.request.query.get("group_key", "")
+        if key and not GROUP_KEY.fullmatch(key):
+            raise RequestError("群聊分组无效，请重新选择。")
+        return key
+
     async def overview(self) -> Any:
         async def load() -> dict[str, Any]:
             day, now = self._local_now()
@@ -108,12 +117,46 @@ class Dashboard:
 
         return await self._serve(load)
 
+    async def groups(self) -> Any:
+        async def load() -> dict[str, Any]:
+            page, size, query = self._page()
+            listing = await self.plugin.store.groups(
+                query=query, limit=size, offset=(page - 1) * size
+            )
+            return {**listing, "page": page, "size": size}
+
+        return await self._serve(load)
+
+    async def group_alias(self) -> Any:
+        async def save() -> dict[str, Any]:
+            if (self.request.content_type or "").partition(";")[0].strip() != "application/json":
+                raise RequestError("请提交 JSON 请求。")
+            body = await self.request.json()
+            if not isinstance(body, dict) or set(body) != {"group_key", "alias"}:
+                raise RequestError("请选择要设置群名的群聊。")
+            key, alias = body["group_key"], body["alias"]
+            if not isinstance(key, str) or not GROUP_KEY.fullmatch(key):
+                raise RequestError("群聊分组无效，请重新选择。")
+            if not isinstance(alias, str) or len(alias) > 100:
+                raise RequestError("群名最多输入 100 个字符。")
+            group = await self.plugin.store.set_group_alias(key, alias)
+            if group is None:
+                raise RequestError("找不到可设置群名的群聊。", 404)
+            return group
+
+        return await self._serve(save)
+
     async def players(self) -> Any:
         async def load() -> dict[str, Any]:
             page, size, query = self._page()
             day, now = self._local_now()
             listing = await self.plugin.store.players(
-                day=day, now=now, query=query, limit=size, offset=(page - 1) * size
+                day=day,
+                now=now,
+                query=query,
+                limit=size,
+                offset=(page - 1) * size,
+                group_key=self._group_key(),
             )
             return {**listing, "page": page, "size": size}
 
@@ -128,7 +171,12 @@ class Dashboard:
             raw_key = self.request.query.get("player_key", "")
             key = player_key(raw_key) if raw_key else None
             listing = await self.plugin.store.history(
-                key, query=query, action=action, limit=size, offset=(page - 1) * size
+                key,
+                query=query,
+                action=action,
+                limit=size,
+                offset=(page - 1) * size,
+                group_key=self._group_key(),
             )
             return {**listing, "page": page, "size": size}
 
